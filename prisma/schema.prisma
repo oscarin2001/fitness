@@ -10,3 +10,31 @@ datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
+
+
+// Modelo tbusers
+model tbusers {
+  PK_user       Int        @id @default(autoincrement())
+  firstName     String
+  lastName      String
+  country       String?
+  city          String?
+  email         String     @unique
+  profileImage  String? // ENLACE DE PERFIL
+  password      String?
+  isActive      Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime?
+  actionHistory Json? // Campo donde se guarda el historial objeto
+  tbdevices     tbdevices?
+}
+
+// DISPOSITIVOS
+model tbdevices {
+  PK_device Int       @id @default(autoincrement())
+  FK_user   Int       @unique
+  devices   Json //OBJETO CON LOS DATOS DE DISPOSITIVOS
+  createdAt DateTime  @default(now())
+  updatedAt DateTime?
+  tbusers   tbusers   @relation(fields: [FK_user], references: [PK_user])
+}
