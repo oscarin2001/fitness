@@ -1,14 +1,18 @@
-import { PrismaClient } from "../../../generated/prisma";
+import { PrismaClient } from "@prisma/client";
 
-let prisma;
+// Mantiene una sola instancia de PrismaClient en desarrollo para evitar múltiples conexiones
+const globalForPrisma = globalThis;
 
+// Use DATABASE_URL if provided; otherwise fall back to a path relative to schema directory (prisma/dev.db)
+// This avoids accidentally creating prisma/prisma/dev.db during dev when env isn't loaded early.
+const datasourceUrl = process.env.DATABASE_URL || "file:./dev.db";
 
-// En desarrollo, verifica si ya hay una instancia de PrismaClient en el objeto global
-if (!global.prisma) {
-  // Si no hay una instancia, crea una nueva y asígnala al objeto global
-  global.prisma = new PrismaClient();
+if (!globalForPrisma.prisma) {
+  globalForPrisma.prisma = new PrismaClient({
+    datasources: { db: { url: datasourceUrl } },
+  });
 }
-// Usa la instancia existente del objeto global
-prisma = global.prisma;
+
+const prisma = globalForPrisma.prisma;
 
 export default prisma;

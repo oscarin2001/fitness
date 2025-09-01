@@ -1,13 +1,20 @@
-import { getToken } from "next-auth/jwt";
-import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { jwtVerify } from "jose";
+import type { NextRequest } from "next/server";
 
 const routePermissions = [
   { route: "/dashboard/settings/*", roles: ["Superadministrador"] },
   { route: "/dashboard/*", roles: ["Administrador", "Superadministrador","Invitado","Lecturador"] },
   { route: "/dashboard", roles: ["Administrador","Superadministrador","Invitado","Lecturador"] },
+  { route: "/account/*", roles: ["Administrador","Superadministrador","Invitado","Lecturador"] },
+  { route: "/account", roles: ["Administrador","Superadministrador","Invitado","Lecturador"] },
+  // Onboarding debe requerir sesión
+  { route: "/onboarding/*", roles: ["Administrador","Superadministrador","Invitado","Lecturador"] },
+  { route: "/onboarding", roles: ["Administrador","Superadministrador","Invitado","Lecturador"] },
   { route: "/api/settings/*", roles: ["Superadministrador"] },
   { route: "/api/dashboard/*", roles: ["Administrador", "Superadministrador","Invitado","Lecturador"] },
+  { route: "/api/account/*", roles: ["Administrador", "Superadministrador","Invitado","Lecturador"] },
+  { route: "/api/account/advice", roles: ["Administrador", "Superadministrador","Invitado","Lecturador"] },
 ];
 
 const convertToRegex = (route: string) =>
@@ -22,9 +29,19 @@ export async function middleware(req: NextRequest) {
     ? '__Secure-authjs.session-token'
     : 'authjs.session-token'
 
-  // Obtener el token de sesión
-  const token = await getToken({ req, secret, cookieName });
-  const isLoggedIn = !!token;
+  // Obtener y verificar el token de sesión desde la cookie
+  const tokenCookie = req.cookies.get(cookieName)?.value;
+  let tokenPayload: any = null;
+  if (tokenCookie && secret) {
+    try {
+      const encoder = new TextEncoder();
+      const { payload } = await jwtVerify(tokenCookie, encoder.encode(secret));
+      tokenPayload = payload;
+    } catch (e) {
+      tokenPayload = null;
+    }
+  }
+  const isLoggedIn = !!tokenPayload;
 
   // 1. Manejar rutas públicas (no protegidas)
   const isProtectedRoute = routePermissions.some(({ route }) =>
@@ -32,6 +49,13 @@ export async function middleware(req: NextRequest) {
   );
 
   if (!isProtectedRoute) {
+    // Si está logueado y es primer login, redirigir a onboarding desde rutas públicas
+    const onboarded = req.cookies.get("onboarded")?.value === "true";
+    let firstLoginCookie = req.cookies.get("first_login")?.value === "true";
+    if (onboarded) firstLoginCookie = false; // estado definitivo
+    if (isLoggedIn && firstLoginCookie && !pathname.startsWith("/onboarding")) {
+      return NextResponse.redirect(new URL("/onboarding", req.url));
+    }
     return NextResponse.next();
   }
 
@@ -46,12 +70,24 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(new URL("/auth/login", req.url));
   }
 
+  // 2.5. Onboarding: si es primer login, forzar a /onboarding, y si no lo es, bloquear /onboarding
+  const onboarded2 = req.cookies.get("onboarded")?.value === "true";
+  let firstLoginCookie = req.cookies.get("first_login")?.value === "true";
+  if (onboarded2) firstLoginCookie = false; // estado definitivo
+  // Allow API calls during onboarding; only redirect non-API pages
+  if (firstLoginCookie && !pathname.startsWith("/onboarding") && !pathname.startsWith("/api")) {
+    return NextResponse.redirect(new URL("/onboarding", req.url));
+  }
+  if (!firstLoginCookie && pathname.startsWith("/onboarding")) {
+    return NextResponse.redirect(new URL("/dashboard", req.url));
+  }
+
   // 3. Verificar permisos de ruta
   for (const { route, roles } of routePermissions) {
     const routeRegex = convertToRegex(route);
     if (
       routeRegex.test(pathname) &&
-      !roles.includes(token.privilege as string)
+      !roles.includes((tokenPayload as any).privilege as string)
     ) {
       if (pathname.startsWith("/api")) {
         return new NextResponse(

@@ -3,7 +3,6 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
@@ -11,30 +10,210 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
-// Modelo tbusers
-model tbusers {
-  PK_user       Int        @id @default(autoincrement())
-  firstName     String
-  lastName      String
-  country       String?
-  city          String?
-  email         String     @unique
-  profileImage  String? // ENLACE DE PERFIL
-  password      String?
-  isActive      Boolean    @default(true)
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime?
-  actionHistory Json? // Campo donde se guarda el historial objeto
-  tbdevices     tbdevices?
+model Usuario {
+  id                     Int                  @id @default(autoincrement())
+  nombre                 String
+  apellido               String
+  fecha_nacimiento       DateTime
+  sexo                   String
+  altura_cm              Float? // Opcional
+  peso_kg                Float? // Opcional
+  objetivo               Objetivo? // Opcional
+  nivel_actividad        NivelActividad? // Opcional
+  pais                   String? // País de residencia (opcional)
+  peso_objetivo_kg       Float? // Objetivo de peso (opcional)
+  velocidad_cambio       VelocidadCambio? // Rapido/Moderado/Lento (opcional)
+  terminos_aceptados     Boolean              @default(false)
+  fecha_creacion         DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  comidas                Comida[]
+  progreso               ProgresoCorporal[]
+  auth                   Auth? // Relación uno a uno con credenciales
+  // Progreso de Onboarding
+  onboarding_completed   Boolean              @default(false)
+  onboarding_step        String?
+  // Preferencias de alimentos seleccionadas en onboarding (JSON con claves: carbs, proteins, fiber, fats, snacks)
+  preferencias_alimentos Json?
+  // Objetivos derivados del plan de IA
+  kcal_objetivo          Float?
+  proteinas_g_obj        Float?
+  grasas_g_obj           Float?
+  carbohidratos_g_obj    Float?
+  agua_litros_obj        Float?
+  plan_ai                Json?
+  hidratacion            HidratacionDia[]
+  // Relaciones inversas requeridas por Prisma
+  planes                 PlanComida[]
+  cumplimientos          CumplimientoComida[]
+  // Alimentos elegidos en onboarding
+  alimentos_seleccion    UsuarioAlimento[]
+  // Preferencia: intervalo de semanas entre mediciones corporales (2-4 sugerido)
+  measurement_interval_weeks Int?
 }
 
-// DISPOSITIVOS
-model tbdevices {
-  PK_device Int       @id @default(autoincrement())
-  FK_user   Int       @unique
-  devices   Json //OBJETO CON LOS DATOS DE DISPOSITIVOS
-  createdAt DateTime  @default(now())
-  updatedAt DateTime?
-  tbusers   tbusers   @relation(fields: [FK_user], references: [PK_user])
+model Auth {
+  id                 Int       @id @default(autoincrement())
+  usuario            Usuario   @relation(fields: [usuarioId], references: [id])
+  usuarioId          Int       @unique
+  email              String    @unique
+  password_hash      String
+  verificado         Boolean   @default(false)
+  token_verificacion String?
+  reset_token        String?
+  last_login         DateTime?
+}
+
+model Alimento {
+  id            Int              @id @default(autoincrement())
+  nombre        String
+  categoria     String?
+  calorias      Float?
+  proteinas     Float?
+  carbohidratos Float?
+  grasas        Float?
+  porcion       String?
+  region        String?
+  comidas       Comida[]
+  recetas       RecetaAlimento[]
+  usuarios      UsuarioAlimento[]
+}
+
+model Receta {
+  id            Int              @id @default(autoincrement())
+  nombre        String
+  instrucciones String?
+  porciones     Int              @default(1)
+  tipo          ComidaTipo?
+  alimentos     RecetaAlimento[]
+  comidas       Comida[]
+  // Relación inversa con PlanComida
+  planes        PlanComida[]
+}
+
+model RecetaAlimento {
+  id         Int      @id @default(autoincrement())
+  receta     Receta   @relation(fields: [recetaId], references: [id])
+  recetaId   Int
+  alimento   Alimento @relation(fields: [alimentoId], references: [id])
+  alimentoId Int
+  gramos     Float
+}
+
+model Comida {
+  id            Int        @id @default(autoincrement())
+  usuario       Usuario    @relation(fields: [usuarioId], references: [id])
+  usuarioId     Int
+  fecha         DateTime
+  comida_tipo   ComidaTipo
+  receta        Receta?    @relation(fields: [recetaId], references: [id])
+  recetaId      Int?
+  alimento      Alimento?  @relation(fields: [alimentoId], references: [id])
+  alimentoId    Int?
+  gramos        Float?
+  calorias      Float?
+  proteinas     Float?
+  carbohidratos Float?
+  grasas        Float?
+}
+
+model HidratacionDia {
+  id         Int      @id @default(autoincrement())
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id])
+  usuarioId  Int
+  fecha      DateTime
+  litros     Float    @default(0)
+  completado Boolean  @default(false)
+
+  @@index([usuarioId, fecha])
+}
+
+model ProgresoCorporal {
+  id              Int      @id @default(autoincrement())
+  usuario         Usuario  @relation(fields: [usuarioId], references: [id])
+  usuarioId       Int
+  fecha           DateTime
+  peso_kg         Float?
+  grasa_percent   Float?
+  musculo_percent Float?
+  agua_percent    Float?
+  imc             Float?
+  cintura_cm      Float?
+  cadera_cm       Float?
+  cuello_cm       Float?
+  pecho_cm        Float?
+  brazo_cm        Float?
+  muslo_cm        Float?
+  gluteo_cm       Float?
+  foto_url        String?
+  notas           String?
+  fuente          String?
+
+  @@unique([usuarioId, fecha])
+  @@index([usuarioId, fecha])
+}
+
+model PlanComida {
+  id          Int        @id @default(autoincrement())
+  usuario     Usuario    @relation(fields: [usuarioId], references: [id])
+  usuarioId   Int
+  comida_tipo ComidaTipo
+  receta      Receta     @relation(fields: [recetaId], references: [id])
+  recetaId    Int
+  porciones   Int        @default(1)
+  overrides   Json? // mapa alimentoId->gramos para ajustes de IA/usuario
+
+  @@unique([usuarioId, comida_tipo])
+}
+
+model CumplimientoComida {
+  id          Int        @id @default(autoincrement())
+  usuario     Usuario    @relation(fields: [usuarioId], references: [id])
+  usuarioId   Int
+  fecha       DateTime
+  comida_tipo ComidaTipo
+  cumplido    Boolean    @default(false)
+  hora_real   DateTime?
+
+  @@index([usuarioId, fecha, comida_tipo])
+  @@unique([usuarioId, fecha, comida_tipo])
+}
+
+// Relación N:N explícita entre Usuario y Alimento para onboarding y preferencias
+model UsuarioAlimento {
+  id          Int       @id @default(autoincrement())
+  usuario     Usuario   @relation(fields: [usuarioId], references: [id])
+  usuarioId   Int
+  alimento    Alimento  @relation(fields: [alimentoId], references: [id])
+  alimentoId  Int
+  categoria   String?
+  prioridad   Int?
+
+  @@unique([usuarioId, alimentoId])
+}
+
+enum Objetivo {
+  Bajar_grasa
+  Ganar_musculo
+  Mantenimiento
+}
+
+enum ComidaTipo {
+  Desayuno
+  Almuerzo
+  Cena
+  Snack
+}
+
+enum NivelActividad {
+  Sedentario
+  Ligero
+  Moderado
+  Activo
+  Extremo
+}
+
+enum VelocidadCambio {
+  Rapido
+  Moderado
+  Lento
 }
