@@ -2,9 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import { Slider } from "@/components/ui/slider";
-import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { toast } from "sonner";
+import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
+import OnboardingHeader from "@/components/onboarding/OnboardingHeader";
+import OnboardingActions from "@/components/onboarding/OnboardingActions";
+import { OnboardingCard } from "@/components/onboarding/OnboardingCard";
 
 export default function OnboardingMetricsPage() {
   const router = useRouter();
@@ -32,10 +35,11 @@ export default function OnboardingMetricsPage() {
   }
 
   return (
-    <div className="min-h-svh flex items-center justify-center p-6">
-      <div className="w-full max-w-md space-y-8">
+    <OnboardingLayout>
+      <OnboardingHeader title="Tus métricas" subtitle="Indica tu altura y peso actuales. Estos datos son clave para calcular tus necesidades y progreso." />
+      <OnboardingCard>
         <div>
-          <h1 className="text-2xl font-semibold text-center">Tu estatura</h1>
+          <h2 className="text-lg font-medium text-center">Tu estatura</h2>
           <p className="text-center text-sm text-muted-foreground">Selecciona tu altura en centímetros</p>
           <div className="mt-6">
             <div className="flex items-center justify-between text-sm mb-2">
@@ -46,8 +50,10 @@ export default function OnboardingMetricsPage() {
             <Slider min={100} max={220} step={1} value={[height]} onValueChange={(v) => setHeight(v[0])} />
           </div>
         </div>
+      </OnboardingCard>
+      <OnboardingCard>
         <div>
-          <h2 className="text-xl font-semibold text-center">Tu peso</h2>
+          <h2 className="text-lg font-medium text-center">Tu peso</h2>
           <p className="text-center text-sm text-muted-foreground">Selecciona tu peso en kilogramos</p>
           <div className="mt-6">
             <div className="flex items-center justify-between text-sm mb-2">
@@ -58,8 +64,8 @@ export default function OnboardingMetricsPage() {
             <Slider min={30} max={200} step={1} value={[weight]} onValueChange={(v) => setWeight(v[0])} />
           </div>
         </div>
-        <Button type="button" className="w-full" onClick={onNext}>Continuar</Button>
-      </div>
-    </div>
+      </OnboardingCard>
+      <OnboardingActions back={{ onClick: () => router.push("/onboarding/sex") }} next={{ onClick: onNext }} />
+    </OnboardingLayout>
   );
 }

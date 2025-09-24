@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
+import OnboardingHeader from "@/components/onboarding/OnboardingHeader";
+import OnboardingActions from "@/components/onboarding/OnboardingActions";
+import { OnboardingCard } from "@/components/onboarding/OnboardingCard";
+import { ThemedCheckbox as Checkbox } from "@/components/onboarding/ThemedCheckbox";
 
 const DEFAULTS = {
   carbs: [
@@ -197,11 +200,27 @@ export default function OnboardingFoodsPage() {
   async function finishAndSave() {
     try {
       setSaving(true);
+      // 1) Leer preferencias actuales para no sobrescribir mealHours / enabledMeals previamente guardados
+      let existingPA: any = null;
+      try {
+        const curRes = await fetch("/api/account/profile", { method: "GET", cache: "no-store" });
+        if (curRes.ok) {
+          const cur = await curRes.json().catch(() => ({}));
+          existingPA = (cur?.user?.preferencias_alimentos && typeof cur.user.preferencias_alimentos === 'object')
+            ? cur.user.preferencias_alimentos
+            : null;
+        }
+      } catch {}
+
+      // 2) Fusionar: preservar mealHours y enabledMeals existentes si no los estamos cambiando aquí
+      const mergedPA = {
+        ...(existingPA || {}),
+        ...prefs,
+        ...(enabledMeals ? { enabledMeals } : { enabledMeals: (existingPA?.enabledMeals ?? undefined) }),
+      } as any;
+
       const payload = {
-        preferencias_alimentos: {
-          ...prefs,
-          ...(enabledMeals ? { enabledMeals } : {}),
-        },
+        preferencias_alimentos: mergedPA,
         onboarding_step: "foods",
       } as any;
       const res = await fetch("/api/account/profile", {
@@ -270,7 +289,7 @@ export default function OnboardingFoodsPage() {
 
   function Group({ title, kind, items }: { title: string; kind: keyof Prefs; items: string[] }) {
     return (
-      <div className="rounded-md border p-4 space-y-3">
+      <OnboardingCard>
         <div className="font-medium">{title}</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {items.map((item) => (
@@ -283,7 +302,7 @@ export default function OnboardingFoodsPage() {
             </label>
           ))}
         </div>
-      </div>
+      </OnboardingCard>
     );
   }
 
@@ -297,62 +316,50 @@ export default function OnboardingFoodsPage() {
   };
 
   return (
-    <div className="min-h-svh flex items-center justify-center p-6">
-      <div className="w-full max-w-2xl space-y-6">
-        <div className="flex items-center justify-between -mb-2">
-          <Button type="button" variant="ghost" onClick={goBack}>Volver</Button>
-          <div className="text-sm text-muted-foreground">{stepIndex + 1} / {steps.length}</div>
+    <OnboardingLayout>
+      <OnboardingHeader title={stepTitleMap[current]} subtitle="Esto nos ayudará a sugerirte comidas y planes acordes a tus preferencias." />
+      {current === "carbs" && (
+        <Group title="Carbohidratos" kind="carbs" items={DEFAULTS.carbs} />
+      )}
+      {current === "proteins" && (
+        <Group title="Proteínas" kind="proteins" items={DEFAULTS.proteins} />
+      )}
+      {current === "fiber" && (
+        <Group title="Fibra" kind="fiber" items={DEFAULTS.fiber} />
+      )}
+      {current === "fats_snacks" && (
+        <div className="space-y-4">
+          <Group title="Grasas" kind="fats" items={DEFAULTS.fats} />
+          <Group title="Snacks" kind="snacks" items={DEFAULTS.snacks} />
         </div>
-        <h1 className="text-2xl font-semibold text-center">{stepTitleMap[current]}</h1>
-        <p className="text-sm text-muted-foreground text-center -mt-2">
-          Esto nos ayudará a sugerirte comidas y planes acordes a tus preferencias.
-        </p>
-
-        {current === "carbs" && (
-          <Group title="Carbohidratos" kind="carbs" items={DEFAULTS.carbs} />
-        )}
-        {current === "proteins" && (
-          <Group title="Proteínas" kind="proteins" items={DEFAULTS.proteins} />
-        )}
-        {current === "fiber" && (
-          <Group title="Fibra" kind="fiber" items={DEFAULTS.fiber} />
-        )}
-        {current === "fats_snacks" && (
-          <div className="space-y-4">
-            <Group title="Grasas" kind="fats" items={DEFAULTS.fats} />
-            <Group title="Snacks" kind="snacks" items={DEFAULTS.snacks} />
-          </div>
-        )}
-        {current === "summary" && (
-          <div className="space-y-4">
-            <div className="rounded-md border p-4">
-              <div className="font-medium mb-2">Carbohidratos ({prefs.carbs.length})</div>
-              <div className="text-sm text-muted-foreground whitespace-pre-wrap">{prefs.carbs.join(", ") || "Sin selección"}</div>
+      )}
+      {current === "summary" && (
+        <div className="space-y-4">
+          <OnboardingCard>
+            <div className="font-medium mb-2">Carbohidratos ({prefs.carbs.length})</div>
+            <div className="text-sm text-muted-foreground whitespace-pre-wrap">{prefs.carbs.join(", ") || "Sin selección"}</div>
+          </OnboardingCard>
+          <OnboardingCard>
+            <div className="font-medium mb-2">Proteínas ({prefs.proteins.length})</div>
+            <div className="text-sm text-muted-foreground whitespace-pre-wrap">{prefs.proteins.join(", ") || "Sin selección"}</div>
+          </OnboardingCard>
+          <OnboardingCard>
+            <div className="font-medium mb-2">Fibra ({prefs.fiber.length})</div>
+            <div className="text-sm text-muted-foreground whitespace-pre-wrap">{prefs.fiber.join(", ") || "Sin selección"}</div>
+          </OnboardingCard>
+          <OnboardingCard>
+            <div className="font-medium mb-2">Grasas/Snacks ({prefs.fats.length + prefs.snacks.length})</div>
+            <div className="text-sm text-muted-foreground whitespace-pre-wrap">
+              {[...prefs.fats, ...prefs.snacks].join(", ") || "Sin selección"}
             </div>
-            <div className="rounded-md border p-4">
-              <div className="font-medium mb-2">Proteínas ({prefs.proteins.length})</div>
-              <div className="text-sm text-muted-foreground whitespace-pre-wrap">{prefs.proteins.join(", ") || "Sin selección"}</div>
-            </div>
-            <div className="rounded-md border p-4">
-              <div className="font-medium mb-2">Fibra ({prefs.fiber.length})</div>
-              <div className="text-sm text-muted-foreground whitespace-pre-wrap">{prefs.fiber.join(", ") || "Sin selección"}</div>
-            </div>
-            <div className="rounded-md border p-4">
-              <div className="font-medium mb-2">Grasas/Snacks ({prefs.fats.length + prefs.snacks.length})</div>
-              <div className="text-sm text-muted-foreground whitespace-pre-wrap">
-                {[...prefs.fats, ...prefs.snacks].join(", ") || "Sin selección"}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          <Button type="button" variant="outline" onClick={goBack} className="w-1/2">Atrás</Button>
-          <Button type="button" onClick={goNext} className="w-1/2" disabled={saving}>
-            {current === "summary" ? (saving ? "Guardando..." : "Finalizar") : "Siguiente"}
-          </Button>
+          </OnboardingCard>
         </div>
-      </div>
-    </div>
+      )}
+      <OnboardingActions
+        back={{ onClick: goBack, label: "Atrás" }}
+        next={{ onClick: goNext, label: current === "summary" ? (saving ? "Guardando..." : "Finalizar") : "Siguiente", disabled: saving }}
+      />
+      <div className="mt-1 mb-4 text-center text-xs text-muted-foreground">{stepIndex + 1} / {steps.length}</div>
+    </OnboardingLayout>
   );
 }

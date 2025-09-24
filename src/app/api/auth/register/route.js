@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { SignJWT } from "jose";
 
 function validateRegister(body) {
   const errors = {};
@@ -70,7 +71,20 @@ export async function POST(request) {
       return { usuario, auth };
     });
 
-    return NextResponse.json(
+    // Configurar token de sesión y cookies después del registro
+    const secret = new TextEncoder().encode(process.env.AUTH_SECRET);
+    const token = await new SignJWT({
+      sub: result.auth.id,
+      email: result.auth.email,
+      name: `${result.usuario.nombre} ${result.usuario.apellido}`,
+      privilege: "Invitado",
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("30d")
+      .sign(secret);
+
+    const response = NextResponse.json(
       {
         message: "Registro exitoso",
         user: {
@@ -83,6 +97,21 @@ export async function POST(request) {
       },
       { status: 201 }
     );
+
+    response.cookies.set("authjs.session-token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30, // 30 días
+    });
+    response.cookies.set("first_login", "true", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: 60 * 60 * 24, // 1 día
+    });
+
+    return response;
   } catch (err) {
     console.error("[REGISTER_ERROR]", err);
     return NextResponse.json({ error: "Error del servidor" }, { status: 500 });

@@ -67,6 +67,11 @@ export async function POST(request) {
       hora_real = dt;
     }
 
+    // Validación: si se marca cumplido, la hora es obligatoria
+    if (cumplido && hora_real == null) {
+      return NextResponse.json({ error: "Hora (HH:MM) requerida cuando se marca como cumplido" }, { status: 400 });
+    }
+
     // Upsert por clave única compuesta (usuarioId, fecha, comida_tipo)
     // Nota: solo incluimos hora_real si no es null para evitar errores
     // cuando la migración aún no ha sido aplicada y el cliente Prisma no conoce el campo

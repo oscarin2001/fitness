@@ -70,6 +70,8 @@ export async function POST(request) {
       "peso_objetivo_kg",
       "velocidad_cambio",
       "terminos_aceptados",
+      // Objetivos nutricionales
+      "proteinas_g_obj",
       // Preferencias de alimentos (JSON)
       "preferencias_alimentos",
       // tracking de onboarding
@@ -86,11 +88,23 @@ export async function POST(request) {
       if (key in data) payload[key] = data[key];
     }
 
+    // Normalizar email vacío/null: evitar disparar flujo de cambio de email por accidente
+    if (payload.email !== undefined) {
+      const emailStr = String(payload.email ?? "").trim();
+      if (!emailStr) {
+        delete payload.email;
+        if (payload.password !== undefined) delete payload.password;
+      } else {
+        payload.email = emailStr.toLowerCase();
+      }
+    }
+
     // Normalizar tipos
     if (payload.altura_cm !== undefined) payload.altura_cm = Number(payload.altura_cm);
     if (payload.peso_kg !== undefined) payload.peso_kg = Number(payload.peso_kg);
     if (payload.fecha_nacimiento) payload.fecha_nacimiento = new Date(payload.fecha_nacimiento);
     if (payload.peso_objetivo_kg !== undefined) payload.peso_objetivo_kg = Number(payload.peso_objetivo_kg);
+  if (payload.proteinas_g_obj !== undefined) payload.proteinas_g_obj = Number(payload.proteinas_g_obj);
 
     // Leer usuario actual y auth para validar con datos existentes
     const [current, auth] = await Promise.all([
@@ -102,6 +116,34 @@ export async function POST(request) {
       const res = NextResponse.json({ error: "No autorizado" }, { status: 401 });
       res.cookies.set(cookieName, "", { path: "/", maxAge: 0 });
       return res;
+    }
+
+    // Si vienen preferencias_alimentos, hacer merge con las existentes para no perder claves (enabledMeals, mealHours, etc.)
+    if (payload.preferencias_alimentos !== undefined) {
+      try {
+        const existing = current.preferencias_alimentos && typeof current.preferencias_alimentos === "object"
+          ? current.preferencias_alimentos
+          : {};
+        const incoming = typeof payload.preferencias_alimentos === "string"
+          ? JSON.parse(payload.preferencias_alimentos)
+          : (payload.preferencias_alimentos || {});
+        const deepMerge = (a, b) => {
+          const out = { ...a };
+          for (const k of Object.keys(b || {})) {
+            const va = out[k];
+            const vb = b[k];
+            if (va && typeof va === "object" && !Array.isArray(va) && vb && typeof vb === "object" && !Array.isArray(vb)) {
+              out[k] = { ...va, ...vb };
+            } else {
+              out[k] = vb;
+            }
+          }
+          return out;
+        };
+        payload.preferencias_alimentos = deepMerge(existing, incoming);
+      } catch {
+        // Si falla el parse/merge, dejar lo entrante tal cual
+      }
     }
 
     const nextState = { ...current, ...payload };

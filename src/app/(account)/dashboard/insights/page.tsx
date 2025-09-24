@@ -7,6 +7,7 @@ import AdherenceArea from "@/components/charts/AdherenceArea";
 import AdherenceTable from "@/components/charts/AdherenceTable";
 import HydrationChart from "@/components/charts/HydrationChart";
 import ComplianceHistory from "@/components/ComplianceHistory";
+import Link from "next/link";
 
 export default function InsightsPage() {
   const [days, setDays] = useState<number>(14);
@@ -23,6 +24,9 @@ export default function InsightsPage() {
           <Button variant={days === 7 ? "default" : "outline"} size="sm" onClick={() => setDays(7)}>7 días</Button>
           <Button variant={days === 14 ? "default" : "outline"} size="sm" onClick={() => setDays(14)}>14 días</Button>
           <Button variant={days === 30 ? "default" : "outline"} size="sm" onClick={() => setDays(30)}>30 días</Button>
+          <Button asChild variant="outline" size="sm" className="ml-2">
+            <Link href="/dashboard">Volver al dashboard</Link>
+          </Button>
         </div>
       </div>
 

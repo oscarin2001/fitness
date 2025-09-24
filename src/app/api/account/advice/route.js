@@ -67,7 +67,8 @@ export async function POST(request) {
       return NextResponse.json({ error: "Faltan datos para la IA", missingFields, step }, { status: 400 });
     }
 
-    const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    // Forzar modelo largo por defecto para evitar truncamiento
+    const GEMINI_MODEL = process.env.GEMINI_LONG_MODEL || process.env.GEMINI_MODEL || "gemini-2.5-pro";
 
     const age = user.fecha_nacimiento
       ? Math.max(0, Math.floor((Date.now() - new Date(user.fecha_nacimiento).getTime()) / (365.25 * 24 * 3600 * 1000)))
@@ -82,12 +83,41 @@ export async function POST(request) {
       prefs = null;
     }
 
-    const formatList = (arr) => Array.isArray(arr) && arr.length ? arr.join(", ") : "—";
+  const formatList = (arr) => Array.isArray(arr) && arr.length ? arr.join(", ") : "—";
     const prefsText = prefs
       ? `\nPreferencias declaradas:\n- Carbohidratos preferidos: ${formatList(prefs.carbs)}\n- Proteínas preferidas: ${formatList(prefs.proteins)}\n- Fuentes de fibra: ${formatList(prefs.fiber)}\n- Grasas saludables: ${formatList(prefs.fats)}\n- Snacks habituales: ${formatList(prefs.snacks)}\n- Alimentos a evitar: ${formatList(prefs.avoids)}\n- Alimentos favoritos: ${formatList(prefs.likes)}`
       : "";
 
-    const prompt = `Eres un nutricionista y entrenador.
+    // Preferencias de comidas habilitadas: construir lista exacta a respetar
+    const em = (prefs && typeof prefs === 'object' && prefs.enabledMeals && typeof prefs.enabledMeals === 'object')
+      ? prefs.enabledMeals
+      : null;
+    const wantTypesOrder = [];
+    if (em) {
+      if (em.desayuno) wantTypesOrder.push("Desayuno");
+      if (em.almuerzo) wantTypesOrder.push("Almuerzo");
+      if (em.cena) wantTypesOrder.push("Cena");
+      const snackCount = (em["snack_mañana"] || em.snack_manana ? 1 : 0) + (em.snack_tarde ? 1 : 0);
+      for (let i = 0; i < snackCount; i++) wantTypesOrder.push("Snack");
+    }
+    const wantTypesText = wantTypesOrder.length ? `\n\nEl usuario seleccionó EXACTAMENTE ${wantTypesOrder.length} comidas diarias con estos tipos (usa el tipo 'Snack' para snacks): ${wantTypesOrder.join(", ")}.\nEl bloque JSON_MEALS debe contener exactamente ${wantTypesOrder.length} items con esos tipos y ninguno adicional.` : "";
+
+    // Objetivo de proteína diario preferido (si existe): priorizar este valor
+    let preferredProteinDaily = null;
+    try {
+      const w = typeof user.peso_kg === 'number' && user.peso_kg > 0 ? user.peso_kg : null;
+      if (typeof user.proteinas_g_obj === 'number' && user.proteinas_g_obj > 0) {
+        preferredProteinDaily = Math.round(user.proteinas_g_obj);
+      } else if (prefs && prefs.proteinRangeKg && typeof prefs.proteinRangeKg === 'object' && w) {
+        const { min, max } = prefs.proteinRangeKg;
+        if (typeof min === 'number' && typeof max === 'number' && max > 0) {
+          const mid = (min + max) / 2;
+          preferredProteinDaily = Math.round(mid * w);
+        }
+      }
+    } catch {}
+
+  const prompt = `Eres un nutricionista y entrenador.
 Datos del usuario:
 - Sexo: ${user.sexo ?? ""}
 - Edad: ${age}
@@ -98,6 +128,7 @@ Datos del usuario:
 - Nivel de actividad: ${user.nivel_actividad ?? ""}
 - Velocidad de cambio: ${user.velocidad_cambio ?? ""}
 - País: ${user.pais ?? ""}${prefsText}
+${preferredProteinDaily ? `\n- Objetivo de proteína diario (fijado o sugerido por el usuario): ${preferredProteinDaily} g/día` : ""}
 
 Tareas:
 1) Mensaje de bienvenida corto.
@@ -131,24 +162,41 @@ Guía de cálculo (aplíquela paso a paso y muestre números intermedios):
   - Carbohidratos: el resto de kcal tras proteína y grasas (mayor en actividad alta/ganancia, moderado en mantenimiento, moderado-bajo en déficit alto).
 - Proyección de peso: usar ~7700 kcal ≈ 1 kg para estimar ritmo semanal según el déficit/superávit.
 
+Reglas adicionales importantes:
+- Si se proporcionó un Objetivo de proteína diario, respétalo: en JSON_SUMMARY.proteinas_g debes colocar EXACTAMENTE ese valor y ajustar comentarios en el texto acorde.
+- Asegúrate de que los ejemplos de comidas sean coherentes con el objetivo de proteína diario global y los tipos de comidas seleccionados.
+
+Reglas para variedad organizada de comidas (no caótica):
+- Genera hasta 4 variantes distintas por cada tipo de comida seleccionado (A, B, C, D), donde:
+  - A se usará para Lunes y Jueves,
+  - B para Martes y Viernes,
+  - C para Miércoles y Sábado,
+  - D para Domingo (si hay suficientes opciones).
+- Cada variante debe evitar repetir exactamente los mismos ingredientes principales. Varía al menos una fuente de proteína, una de carbohidrato o una grasa saludable entre variantes.
+- Respeta las preferencias del usuario (likes) y las exclusiones (avoids). Si hay pocas opciones válidas, genera las variantes que se pueda (mínimo 2 si es posible) e indícalo en los ingredientes.
+- Usa tipos normalizados: Desayuno | Almuerzo | Cena | Snack.
+
 Salida estructurada requerida (tres bloques al final, cada uno en su propia línea):
 - JSON_SUMMARY: { "tmb": number, "tdee": number, "kcal_objetivo": number, "deficit_superavit_kcal": number, "ritmo_peso_kg_sem": number, "proteinas_g": number, "grasas_g": number, "carbohidratos_g": number }
 - JSON_MEALS: { "items": [ { "tipo": "Desayuno|Almuerzo|Cena|Snack", "nombre": string, "porciones": number, "ingredientes": [ { "nombre": string, "gramos": number } ] } ] }
 - JSON_HYDRATION: { "litros": number }
+- OPCIONAL JSON_MEALS_VARIANTS: { "variants": { "Desayuno": [ { "nombre": string, "porciones": number, "ingredientes": [ { "nombre": string, "gramos": number } ] } ], "Almuerzo": [...], "Cena": [...], "Snack": [...] } }
 No agregues texto después de estos bloques. Asegúrate de que cada bloque sea JSON válido.
-`;
+${wantTypesText}`;
 
     // Use AI SDK to generate text (the provider reads GOOGLE_GENERATIVE_AI_API_KEY from env)
     const { text: content } = await generateText({
       model: google(GEMINI_MODEL),
       prompt: `Eres un experto en nutrición y entrenamiento, preciso y claro.\n\n${prompt}`,
       temperature: 0.7,
+      maxTokens: 8192,
     });
 
-    // Intentar extraer JSON_SUMMARY, JSON_MEALS y JSON_HYDRATION del contenido de manera robusta
+  // Intentar extraer JSON_SUMMARY, JSON_MEALS y JSON_HYDRATION del contenido de manera robusta
     let summary = null;
     let meals = null;
     let hydration = null;
+    let mealsVariants = null;
 
     function extractJsonBlock(label, text) {
       if (!text) return null;
@@ -202,10 +250,32 @@ No agregues texto después de estos bloques. Asegúrate de que cada bloque sea J
       if (mObj && typeof mObj === 'object') meals = mObj;
       const hObj = extractJsonBlock('JSON_HYDRATION', content);
       if (hObj && typeof hObj === 'object') hydration = hObj;
+      const vObj = extractJsonBlock('JSON_MEALS_VARIANTS', content);
+      if (vObj && typeof vObj === 'object' && vObj.variants && typeof vObj.variants === 'object') {
+        mealsVariants = vObj.variants;
+      }
     } catch {}
 
-    // Fallback: si la IA no entrega meals/hydration, generamos una propuesta básica con alimentos del usuario
-    if (!meals || !Array.isArray(meals.items) || meals.items.length === 0) {
+    // Forzar el objetivo diario de proteína si el usuario lo definió/sugirió
+    if (summary && preferredProteinDaily && typeof preferredProteinDaily === 'number') {
+      try {
+        summary.proteinas_g = preferredProteinDaily;
+      } catch {}
+    }
+
+    // Helper: normaliza un string al tipo estándar o null
+    function normalizeTipoComida(raw) {
+      if (!raw) return null;
+      const s = String(raw).toLowerCase();
+      if (/desayuno|breakfast|mañana|morning/.test(s)) return "Desayuno";
+      if (/almuerzo|comida|lunch|mediod[ií]a|medio dia/.test(s)) return "Almuerzo";
+      if (/cena|dinner|noche|night/.test(s)) return "Cena";
+      if (/snack|merienda|colaci[oó]n|tentempi[eé]|snacks?/.test(s)) return "Snack";
+      return null;
+    }
+
+    // Helper: generar items básicos por tipo a partir de alimentos guardados
+    async function generateBasicItemsByTypes(userId, types) {
       const saved = await prisma.usuarioAlimento.findMany({
         where: { usuarioId: userId },
         include: { alimento: true },
@@ -217,47 +287,57 @@ No agregues texto después de estos bloques. Asegúrate de que cada bloque sea J
       const pickFat  = () => by((c, n) => c.includes('grasa') || /aceite|nuez|mani|maní|almendra|aguacate|avellana|semilla|mantequilla/.test(n));
       const pickFiber= () => by((c, n) => c.includes('fibra') || /brocoli|brócoli|lechuga|espinaca|zanahoria|berenjena|tomate|verdura|ensalada/.test(n));
       const pickFruit= () => by((c, n) => /banana|platan|plátano|fresa|frutilla|manzana|pera|uva|naranja|fruta/.test(n));
-
-      const g = (a, def) => a ? def : 0;
       const mk = (tipo, nombre, arr) => ({ tipo, nombre, porciones: 1, ingredientes: arr.filter((x) => x.gramos > 0) });
       const p1 = pickProt();
       const c1 = pickCarb();
       const f1 = pickFat();
       const v1 = pickFiber();
       const fr = pickFruit();
+      const makeFor = (t) => {
+        if (t === 'Desayuno') return mk('Desayuno', 'Desayuno básico', [ p1 && { nombre: p1.nombre, gramos: 120 }, fr && { nombre: fr.nombre, gramos: 100 }, f1 && { nombre: f1.nombre, gramos: 10 } ].filter(Boolean));
+        if (t === 'Almuerzo') return mk('Almuerzo', 'Almuerzo básico', [ p1 && { nombre: p1.nombre, gramos: 120 }, c1 && { nombre: c1.nombre, gramos: 120 }, v1 && { nombre: v1.nombre, gramos: 100 }, f1 && { nombre: f1.nombre, gramos: 10 } ].filter(Boolean));
+        if (t === 'Cena') return mk('Cena', 'Cena básica', [ p1 && { nombre: p1.nombre, gramos: 100 }, c1 && { nombre: c1.nombre, gramos: 100 }, v1 && { nombre: v1.nombre, gramos: 120 }, f1 && { nombre: f1.nombre, gramos: 10 } ].filter(Boolean));
+        return mk('Snack', 'Snack básico', [ fr && { nombre: fr.nombre, gramos: 120 }, f1 && { nombre: f1.nombre, gramos: 15 } ].filter(Boolean));
+      };
+      return types.map((t) => makeFor(t)).filter((m) => m.ingredientes.length);
+    }
 
-      const desayuno = mk('Desayuno', 'Desayuno básico', [
-        p1 ? { nombre: p1.nombre, gramos: 120 } : null,
-        fr ? { nombre: fr.nombre, gramos: 100 } : null,
-        f1 ? { nombre: f1.nombre, gramos: 10 } : null,
-      ].filter(Boolean));
-
-      const almuerzo = mk('Almuerzo', 'Almuerzo básico', [
-        p1 ? { nombre: p1.nombre, gramos: 120 } : null,
-        c1 ? { nombre: c1.nombre, gramos: 120 } : null,
-        v1 ? { nombre: v1.nombre, gramos: 100 } : null,
-        f1 ? { nombre: f1.nombre, gramos: 10 } : null,
-      ].filter(Boolean));
-
-      const cena = mk('Cena', 'Cena básica', [
-        p1 ? { nombre: p1.nombre, gramos: 100 } : null,
-        (c1 && c1 !== (almuerzo.ingredientes[1]?.nombre)) ? { nombre: c1.nombre, gramos: 100 } : null,
-        v1 ? { nombre: v1.nombre, gramos: 120 } : null,
-        f1 ? { nombre: f1.nombre, gramos: 10 } : null,
-      ].filter(Boolean));
-
-      const snack = mk('Snack', 'Snack básico', [
-        fr ? { nombre: fr.nombre, gramos: 120 } : null,
-        f1 ? { nombre: f1.nombre, gramos: 15 } : null,
-      ].filter(Boolean));
-
-      const items = [desayuno, almuerzo, cena, snack].filter((m) => m.ingredientes.length);
+    // Fallback inicial si IA no trajo comidas
+    if (!meals || !Array.isArray(meals.items) || meals.items.length === 0) {
+      const baseTypes = wantTypesOrder.length ? wantTypesOrder : ["Desayuno", "Almuerzo", "Cena", "Snack"];
+      const items = await generateBasicItemsByTypes(userId, baseTypes);
       meals = { items };
+    }
+
+    // Enforce: si hay enabledMeals definidos, ajustar a EXACTAMENTE esos tipos/cantidad
+    if (wantTypesOrder.length && meals && Array.isArray(meals.items)) {
+      // bucket por tipo normalizado
+      const buckets = { Desayuno: [], Almuerzo: [], Cena: [], Snack: [] };
+      for (const it of meals.items) {
+        const t = normalizeTipoComida(it?.tipo);
+        if (t && buckets[t]) buckets[t].push(it);
+      }
+      const resultItems = [];
+      for (const t of wantTypesOrder) {
+        if (buckets[t] && buckets[t].length) {
+          resultItems.push(buckets[t].shift());
+        } else {
+          // generar básico para el tipo faltante
+          const gen = await generateBasicItemsByTypes(userId, [t]);
+          if (gen.length) resultItems.push(gen[0]);
+        }
+      }
+      meals = { items: resultItems };
     }
 
     if (!hydration || !(hydration.litros > 0)) {
       const litros = summary?.kcal_objetivo ? Math.max(1.5, Math.min(4, Math.round((summary.kcal_objetivo / 1000) * 10) / 10)) : 2.0;
       hydration = { litros };
+    }
+
+    // Adjuntar variantes si existen
+    if (meals && mealsVariants) {
+      try { meals.variants = mealsVariants; } catch {}
     }
 
     return NextResponse.json({ advice: content, summary, meals, hydration }, { status: 200 });

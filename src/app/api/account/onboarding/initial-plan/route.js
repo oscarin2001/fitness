@@ -218,6 +218,14 @@ export async function POST(request) {
     }
 
     const results = [];
+    // Leer horas preferidas del usuario si existen
+    let mealHours = null;
+    try {
+      const u = await prisma.usuario.findUnique({ where: { id: userId }, select: { preferencias_alimentos: true } });
+      const prefs = u?.preferencias_alimentos || null;
+      const mh = prefs && typeof prefs === "object" ? prefs.mealHours : null;
+      if (mh && typeof mh === "object") mealHours = mh;
+    } catch {}
 
     for (const r of items) {
       // admitir claves alternativas para tipo
@@ -246,10 +254,15 @@ export async function POST(request) {
       const macros = r.macros || await computeMacros(normIngs);
 
       // Upsert plan for this meal type
+      // Definir overrides iniciales con hora preferida si existe para el tipo
+      const baseOverrides = (mealHours && mealHours[String(tipo)] && /^\d{2}:\d{2}$/.test(mealHours[String(tipo)]))
+        ? { macros, source: "onboarding", hora: mealHours[String(tipo)] }
+        : { macros, source: "onboarding" };
+
       const plan = await prisma.planComida.upsert({
         where: { usuarioId_comida_tipo: { usuarioId: userId, comida_tipo: tipo } },
-        update: { recetaId: receta.id, porciones, overrides: { macros, source: "onboarding" } },
-        create: { usuarioId: userId, comida_tipo: tipo, recetaId: receta.id, porciones, overrides: { macros, source: "onboarding" } },
+        update: { recetaId: receta.id, porciones, overrides: baseOverrides },
+        create: { usuarioId: userId, comida_tipo: tipo, recetaId: receta.id, porciones, overrides: baseOverrides },
       });
 
       results.push({ tipo, recetaId: receta.id, planId: plan.id, macros });

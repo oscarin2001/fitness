@@ -3,13 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff } from "lucide-react";
@@ -83,8 +76,11 @@ export default function RegisterPage() {
       }
 
       // Registro OK: mostrar toast y redirigir al onboarding
-      toast.success("¡Bienvenido a FitBalance!");
-      router.replace("/account/onboarding");
+      // El flujo de onboarding vive en /onboarding (no /account/onboarding)
+      const redirectUrl = data?.redirect || "/onboarding";
+      toast.success("¡Bienvenido a FitBalance! Redirigiendo...");
+      console.log("Redirigiendo al onboarding..."); // Agregar log para depurar redirección
+      router.replace(redirectUrl);
     } catch {
       const message = "Error del servidor, intenta de nuevo";
       setErrors((prev) => ({ ...prev, server: message }));
@@ -95,100 +91,96 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-[80vh] flex items-center justify-center p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-2xl">Crear cuenta - FitBalance</CardTitle>
-          <CardDescription>Regístrate para comenzar</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={onSubmit} className="grid gap-6">
-            <div className="grid gap-2">
-              <Label htmlFor="nombre">Nombre</Label>
-              <Input id="nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} />
-              {errors.nombre && <p className="text-sm text-red-600">{errors.nombre}</p>}
-            </div>
+  <div className="p-6 max-w-sm mx-auto space-y-6 bg-white rounded-lg border border-gray-300 shadow">
+      <div>
+        <h1 className="text-2xl font-semibold">Crear cuenta - FitBalance</h1>
+        <p className="text-sm text-muted-foreground">Regístrate para comenzar</p>
+      </div>
+  <form action="/auth/register" method="POST" onSubmit={onSubmit} className="grid gap-6">
+        <div className="grid gap-2">
+          <Label htmlFor="nombre">Nombre</Label>
+          <Input id="nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} />
+          {errors.nombre && <p className="text-sm text-red-600">{errors.nombre}</p>}
+        </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="apellido">Apellido</Label>
-              <Input id="apellido" value={apellido} onChange={(e) => setApellido(e.target.value)} />
-              {errors.apellido && <p className="text-sm text-red-600">{errors.apellido}</p>}
-            </div>
+        <div className="grid gap-2">
+          <Label htmlFor="apellido">Apellido</Label>
+          <Input id="apellido" value={apellido} onChange={(e) => setApellido(e.target.value)} />
+          {errors.apellido && <p className="text-sm text-red-600">{errors.apellido}</p>}
+        </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" placeholder="tucorreo@ejemplo.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-              {errors.email && <p className="text-sm text-red-600">{errors.email}</p>}
-            </div>
+        <div className="grid gap-2">
+          <Label htmlFor="email">Email</Label>
+          <Input id="email" type="email" placeholder="tucorreo@ejemplo.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+          {errors.email && <p className="text-sm text-red-600">{errors.email}</p>}
+        </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="password">Contraseña</Label>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  placeholder="********"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                  onClick={() => setShowPassword((s) => !s)}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-              {errors.password && <p className="text-sm text-red-600">{errors.password}</p>}
-            </div>
+        <div className="grid gap-2">
+          <Label htmlFor="password">Contraseña</Label>
+          <div className="relative">
+            <Input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              placeholder="********"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button
+              type="button"
+              aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+              onClick={() => setShowPassword((s) => !s)}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          {errors.password && <p className="text-sm text-red-600">{errors.password}</p>}
+        </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="confirmPassword">Confirmar contraseña</Label>
-              <div className="relative">
-                <Input
-                  id="confirmPassword"
-                  type={showConfirmPassword ? "text" : "password"}
-                  placeholder="********"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  aria-label={showConfirmPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                  onClick={() => setShowConfirmPassword((s) => !s)}
-                >
-                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-              {errors.confirmPassword && <p className="text-sm text-red-600">{errors.confirmPassword}</p>}
-            </div>
+        <div className="grid gap-2">
+          <Label htmlFor="confirmPassword">Confirmar contraseña</Label>
+          <div className="relative">
+            <Input
+              id="confirmPassword"
+              type={showConfirmPassword ? "text" : "password"}
+              placeholder="********"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+            <button
+              type="button"
+              aria-label={showConfirmPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+              onClick={() => setShowConfirmPassword((s) => !s)}
+            >
+              {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          {errors.confirmPassword && <p className="text-sm text-red-600">{errors.confirmPassword}</p>}
+        </div>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-              />
-              Recordarme
-            </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+          Recordarme
+        </label>
 
-            {errors.server && <div className="text-sm text-red-600">{errors.server}</div>}
+        {errors.server && <div className="text-sm text-red-600">{errors.server}</div>}
 
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Creando cuenta..." : "Crear cuenta"}
-            </Button>
+        <Button type="submit" className="w-full" disabled={loading}>
+          {loading ? "Creando cuenta..." : "Crear cuenta"}
+        </Button>
 
-            <div className="mt-2 text-center text-sm">
-              ¿Ya tienes cuenta?{" "}
-              <a href="/auth/login" className="underline underline-offset-4">
-                Inicia sesión
-              </a>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+        <div className="mt-2 text-center text-sm">
+          ¿Ya tienes cuenta?{" "}
+          <a href="/auth/login" className="underline underline-offset-4">
+            Inicia sesión
+          </a>
+        </div>
+      </form>
     </div>
   );
 }

@@ -3,9 +3,12 @@
 import { useRouter } from "next/navigation";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { toast } from "sonner";
+import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
+import OnboardingHeader from "@/components/onboarding/OnboardingHeader";
+import OnboardingActions from "@/components/onboarding/OnboardingActions";
+import { OnboardingCard } from "@/components/onboarding/OnboardingCard";
 
 const speeds = [
   { key: "Rapido", desc: "Mayor déficit / superávit. Cambios más rápidos" },
@@ -32,19 +35,18 @@ export default function OnboardingSpeedPage() {
         return;
       }
       if (!res.ok) throw new Error();
-      router.push("/onboarding/meals-terms");
+      // Continuar con el flujo nutricional correcto
+      // 1) meal-days -> 2) protein-target -> 3) meals-terms
+      router.push("/onboarding/meal-days");
     } catch {
       toast.error("No se pudo guardar");
     }
   }
 
   return (
-    <div className="min-h-svh flex items-center justify-center p-6">
-      <div className="w-full max-w-md space-y-6">
-        <div className="-mb-2">
-          <Button variant="ghost" onClick={() => router.push("/onboarding/target-weight")}>Volver</Button>
-        </div>
-        <h1 className="text-2xl font-semibold text-center">¿Con qué rapidez deseas cambiar?</h1>
+    <OnboardingLayout>
+      <OnboardingHeader title="¿Con qué rapidez deseas cambiar?" />
+      <OnboardingCard>
         <RadioGroup value={value} onValueChange={setValue} className="grid gap-3">
           {speeds.map((s) => (
             <div key={s.key} className="flex items-center gap-3 rounded-md border p-3">
@@ -56,8 +58,9 @@ export default function OnboardingSpeedPage() {
             </div>
           ))}
         </RadioGroup>
-        <Button type="button" className="w-full" onClick={onNext}>Continuar</Button>
-      </div>
-    </div>
+      </OnboardingCard>
+      <OnboardingActions back={{ onClick: () => router.push("/onboarding/target-weight") }} next={{ onClick: onNext }} />
+    </OnboardingLayout>
   );
 }
+

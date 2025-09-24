@@ -108,7 +108,7 @@ export default function ProgressProfilePage() {
   }
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
+    <div className="p-6 max-w-3xl mx-auto space-y-6">
       <Toaster />
       <h1 className="text-2xl font-bold">Progreso corporal</h1>
       <p className="text-sm text-muted-foreground">Registra tu peso, porcentaje de grasa y masa muscular, y tus medidas corporales. Recomendado: ingresar datos 3-7 veces por semana.</p>
@@ -196,7 +196,7 @@ export default function ProgressProfilePage() {
             </div>
 
             <div className="md:col-span-3 flex gap-3">
-              <Button type="submit" disabled={saving}>{saving ? "Guardando..." : "Guardar"}</Button>
+              <Button type="submit" disabled={saving}>{saving ? "Guardando..." : "Guardar cambios"}</Button>
               <Button type="button" variant="secondary" onClick={applyAdjust}>Ajustar plan según tendencia</Button>
             </div>
           </form>

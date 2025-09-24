@@ -3,9 +3,12 @@
 import { useRouter } from "next/navigation";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { toast } from "sonner";
+import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
+import OnboardingHeader from "@/components/onboarding/OnboardingHeader";
+import OnboardingActions from "@/components/onboarding/OnboardingActions";
+import { OnboardingCard } from "@/components/onboarding/OnboardingCard";
 
 const options = [
   { key: "Bajar", value: "Bajar_grasa", desc: "Reducir porcentaje de grasa corporal" },
@@ -39,12 +42,9 @@ export default function OnboardingObjectivePage() {
   }
 
   return (
-    <div className="min-h-svh flex items-center justify-center p-6">
-      <div className="w-full max-w-md space-y-6">
-        <div className="-mb-2">
-          <Button variant="ghost" onClick={() => router.push("/onboarding/country")}>Volver</Button>
-        </div>
-        <h1 className="text-2xl font-semibold text-center">¿Cuál es tu objetivo?</h1>
+    <OnboardingLayout>
+      <OnboardingHeader title="¿Cuál es tu objetivo?" subtitle="Elige el objetivo que mejor se adapte a lo que quieres lograr. Esto orienta tu plan personalizado." />
+      <OnboardingCard>
         <RadioGroup value={value} onValueChange={setValue} className="grid gap-3">
           {options.map((o) => (
             <div key={o.key} className="flex items-center gap-3 rounded-md border p-3">
@@ -56,8 +56,8 @@ export default function OnboardingObjectivePage() {
             </div>
           ))}
         </RadioGroup>
-        <Button type="button" className="w-full" onClick={onNext}>Continuar</Button>
-      </div>
-    </div>
+      </OnboardingCard>
+      <OnboardingActions back={{ onClick: () => router.push("/onboarding/country") }} next={{ onClick: onNext }} />
+    </OnboardingLayout>
   );
 }

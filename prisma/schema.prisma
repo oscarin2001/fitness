@@ -45,10 +45,13 @@ model Usuario {
   // Relaciones inversas requeridas por Prisma
   planes                 PlanComida[]
   cumplimientos          CumplimientoComida[]
+  cumplimientos_dieta   CumplimientoDieta[] // Relación con el modelo CumplimientoDieta
   // Alimentos elegidos en onboarding
   alimentos_seleccion    UsuarioAlimento[]
   // Preferencia: intervalo de semanas entre mediciones corporales (2-4 sugerido)
   measurement_interval_weeks Int?
+  // Campo para almacenar los días de dieta/entrenamiento
+  dias_dieta            Json? // Días seleccionados para la dieta (opcional)
 }
 
 model Auth {
@@ -176,6 +179,14 @@ model CumplimientoComida {
 
   @@index([usuarioId, fecha, comida_tipo])
   @@unique([usuarioId, fecha, comida_tipo])
+}
+
+model CumplimientoDieta {
+  id        Int      @id @default(autoincrement())
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id])
+  usuarioId Int
+  fecha     DateTime
+  cumplido  Boolean  // Indica si cumplió o no
 }
 
 // Relación N:N explícita entre Usuario y Alimento para onboarding y preferencias

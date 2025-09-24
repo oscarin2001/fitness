@@ -1,194 +1,210 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-// Simple step status type
-type Step = "idle" | "running" | "ok" | "error";
-
-export default function RegeneratePlanPage() {
-  const router = useRouter();
-  const [stepAdvice, setStepAdvice] = useState<Step>("idle");
-  const [stepPlan, setStepPlan] = useState<Step>("idle");
-  const [stepHydration, setStepHydration] = useState<Step>("idle");
-  const [log, setLog] = useState<string[]>([]);
-  const [result, setResult] = useState<{ items?: any[]; litros?: number } | null>(null);
-  const [started, setStarted] = useState(false);
-  const printableRef = useRef<HTMLDivElement>(null);
-
-  function pushLog(s: string) {
-    setLog((l) => [...l, s]);
-  }
-
-  async function run() {
-    setStarted(true);
-    setLog([]);
-    setStepAdvice("running");
-    setStepPlan("idle");
-    setStepHydration("idle");
-    toast.info("Iniciando regeneración del plan…");
-
-    try {
-      // 1) Advice
-      pushLog("Solicitando consejo de IA…");
-      const adviceRes = await fetch("/api/account/advice", { method: "POST", cache: "no-store", credentials: "include" });
-      const adviceJson = await adviceRes.json();
-      if (!adviceRes.ok) {
-        setStepAdvice("error");
-        throw new Error(adviceJson?.error || "Error al generar consejo");
+function tryParseAdviceJson(text: string): { summary?: any; meals?: any; hydration?: any } | null {
+  try {
+    const lines = (text || "").split(/\n+/);
+    const out: any = {};
+    for (const ln of lines) {
+      const m = ln.match(/^\s*JSON_(SUMMARY|MEALS|HYDRATION)\s*:\s*(.*)$/i);
+      if (m) {
+        const key = m[1].toUpperCase();
+        const jsonPart = m[2];
+        try {
+          const parsed = JSON.parse(jsonPart);
+          if (key === "SUMMARY") out.summary = parsed;
+          if (key === "MEALS") out.meals = parsed;
+          if (key === "HYDRATION") out.hydration = parsed;
+        } catch {}
       }
-      setStepAdvice("ok");
-
-      const items = Array.isArray(adviceJson?.meals?.items) ? adviceJson.meals.items : [];
-      const litros = Number(adviceJson?.hydration?.litros);
-      setResult({ items, litros: Number.isFinite(litros) && litros > 0 ? litros : undefined });
-
-      // 2) Guardar plan
-      if (items.length) {
-        setStepPlan("running");
-        pushLog("Guardando plan de comidas…");
-        const savePlan = await fetch("/api/account/onboarding/initial-plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items }),
-          credentials: "include",
-          cache: "no-store",
-        });
-        if (!savePlan.ok) {
-          setStepPlan("error");
-          const t = await savePlan.text().catch(() => "");
-          throw new Error(t || "No se pudo guardar el plan inicial");
-        }
-        setStepPlan("ok");
-      } else {
-        pushLog("No se recibieron items de comidas. Se omitirá el guardado del plan.");
-        setStepPlan("ok");
-      }
-
-      // 3) Guardar hidratación
-      if (Number.isFinite(litros) && litros > 0) {
-        setStepHydration("running");
-        pushLog("Guardando objetivo de hidratación…");
-        const saveHyd = await fetch("/api/account/hydration/goal", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ litros }),
-          credentials: "include",
-          cache: "no-store",
-        });
-        if (!saveHyd.ok) {
-          setStepHydration("error");
-          const t = await saveHyd.text().catch(() => "");
-          throw new Error(t || "No se pudo guardar la hidratación");
-        }
-        setStepHydration("ok");
-      } else {
-        pushLog("No se recibió objetivo de hidratación. Se omitirá el guardado.");
-        setStepHydration("ok");
-      }
-
-      // 4) Aplicar objetivos al perfil (kcal, macros y agua) usando el summary del consejo
-      try {
-        const applyBody: any = {};
-        if (adviceJson?.summary && typeof adviceJson.summary === "object") applyBody.summary = adviceJson.summary;
-        if (Number.isFinite(litros) && litros > 0) applyBody.agua_litros_obj = litros;
-        if (Object.keys(applyBody).length) {
-          pushLog("Aplicando objetivos de plan (kcal/macros/agua)…");
-          const applyRes = await fetch("/api/account/plan/apply", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(applyBody),
-            credentials: "include",
-            cache: "no-store",
-          });
-          if (!applyRes.ok) {
-            const t = await applyRes.text().catch(() => "");
-            pushLog(t || "No se pudieron aplicar objetivos del plan");
-          }
-        }
-      } catch (e: any) {
-        pushLog(e?.message || "Error aplicando objetivos del plan");
-      }
-
-      pushLog("Proceso completado. Redirige a tu plan para verlo.");
-      toast.success("Regeneración completada");
-    } catch (e: any) {
-      pushLog(e?.message || "Error durante la regeneración");
-      toast.error(e?.message || "Error durante la regeneración");
     }
-  }
+    return Object.keys(out).length ? out : null;
+  } catch { return null; }
+}
+
+export default function ExportPlanPage() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [advice, setAdvice] = useState<string>("");
+  const [summary, setSummary] = useState<any | null>(null);
+  const [mealsCount, setMealsCount] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!started) {
-      run();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    (async () => {
+      try {
+        // Intentar leer el último consejo guardado desde el perfil y/o summary del dashboard
+        const [p, s] = await Promise.all([
+          fetch("/api/account/profile", { method: "GET", cache: "no-store" }),
+          fetch("/api/account/dashboard/summary", { method: "GET", cache: "no-store" }),
+        ]);
+        let text = "";
+        let sum: any = null;
+        try {
+          const pj = await p.json();
+          // El backend guarda el consejo en el atributo plan_ia (o variantes)
+          const u = pj?.user || {};
+          text = u?.plan_ia || u?.planIa || u?.planIA || u?.advice || "";
+        } catch {}
+        try {
+          const sj = await s.json();
+          sum = sj?.objetivos ? sj : (sj?.summary || null);
+        } catch {}
+
+        // Si no hay summary pero el consejo contiene JSON_SUMMARY o similares, intentar parsearlo
+        if (!sum && text) {
+          const parsed = tryParseAdviceJson(text);
+          if (parsed?.summary) sum = { summary: parsed.summary };
+          if (parsed?.meals) setMealsCount(Array.isArray(parsed.meals?.items) ? parsed.meals.items.length : null);
+        }
+
+        // Fallback: si no hay consejo guardado, solicitar uno en vivo (no se guarda en DB)
+        if (!text) {
+          const advRes = await fetch("/api/account/advice", { method: "POST", cache: "no-store", credentials: "include" });
+          const advJson = await advRes.json().catch(() => ({}));
+          if (advRes.ok) {
+            text = advJson?.advice || "";
+            if (!sum) sum = advJson?.summary ? { summary: advJson.summary } : null;
+            if (Array.isArray(advJson?.meals?.items)) setMealsCount(advJson.meals.items.length);
+          }
+        }
+        if (!cancelled) {
+          setAdvice(text);
+          setSummary(sum);
+        }
+      } catch {
+        if (!cancelled) toast.error("No se pudo cargar el contenido");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  const allOk = useMemo(() => stepAdvice === "ok" && stepPlan === "ok" && stepHydration === "ok", [stepAdvice, stepPlan, stepHydration]);
+  async function downloadPdf() {
+    try {
+      // Cargar jsPDF UMD si no está cargado
+      const ensureJsPdf = () => new Promise<void>((resolve, reject) => {
+        const w = window as any;
+        if (w.jspdf?.jsPDF) return resolve();
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error("No se pudo cargar jsPDF"));
+        document.head.appendChild(script);
+      });
+      await ensureJsPdf();
+      const jsPDF = (window as any).jspdf?.jsPDF;
+      if (!jsPDF) throw new Error("jsPDF no disponible");
+      const doc = new jsPDF({ unit: "pt", format: "a4" });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 40;
+      const usableWidth = pageWidth - margin * 2;
 
-  function printPDF() {
-    if (!printableRef.current) return;
-    window.print();
+      // Título
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("Consejo personalizado - FitBalance", margin, margin);
+
+      // Fecha
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(100);
+      doc.text(new Date().toLocaleString(), margin, margin + 16);
+
+      // Resumen estructurado (si existe)
+      let cursorY = margin + 40;
+      const sum = summary?.summary || summary?.objetivos || null;
+      if (sum) {
+        doc.setTextColor(0);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(12);
+        doc.text("Resumen", margin, cursorY);
+        cursorY += 18;
+        doc.setFont("helvetica", "normal");
+        const rows: Array<[string, string]> = [
+          ["TMB", sum.tmb != null ? `${Math.round(sum.tmb)} kcal` : "—"],
+          ["TDEE", sum.tdee != null ? `${Math.round(sum.tdee)} kcal` : "—"],
+          ["Kcal objetivo", sum.kcal_objetivo != null ? `${Math.round(sum.kcal_objetivo)} kcal` : "—"],
+          ["Déficit/Superávit", sum.deficit_superavit_kcal != null ? `${Math.round(sum.deficit_superavit_kcal)} kcal/día` : "—"],
+          ["Ritmo estimado", sum.ritmo_peso_kg_sem != null ? `${Number(sum.ritmo_peso_kg_sem).toFixed(2)} kg/sem` : "—"],
+          ["Proteínas", sum.proteinas_g != null ? `${Math.round(sum.proteinas_g)} g` : "—"],
+          ["Grasas", sum.grasas_g != null ? `${Math.round(sum.grasas_g)} g` : "—"],
+          ["Carbohidratos", sum.carbohidratos_g != null ? `${Math.round(sum.carbohidratos_g)} g` : "—"],
+        ];
+        const leftColWidth = 140;
+        const lineHeight = 16;
+        rows.forEach(([k, v]) => {
+          if (cursorY > pageHeight - margin) {
+            doc.addPage();
+            cursorY = margin;
+          }
+          doc.text(k + ":", margin, cursorY);
+          doc.text(v, margin + leftColWidth, cursorY);
+          cursorY += lineHeight;
+        });
+        // separador
+        cursorY += 8;
+        doc.setDrawColor(200);
+        doc.line(margin, cursorY, pageWidth - margin, cursorY);
+        cursorY += 16;
+      }
+
+      // Contenido del consejo (texto)
+      doc.setTextColor(0);
+      doc.setFontSize(12);
+      const content = (advice || "No hay contenido disponible.").replace(/\r\n/g, "\n");
+      const lines = doc.splitTextToSize(content, usableWidth);
+      const lineHeight = 16;
+      lines.forEach((line: string) => {
+        if (cursorY > pageHeight - margin) {
+          doc.addPage();
+          cursorY = margin;
+        }
+        doc.text(line, margin, cursorY);
+        cursorY += lineHeight;
+      });
+
+      doc.save("Consejo-FitBalance.pdf");
+    } catch (e) {
+      toast.error("No se pudo generar el PDF");
+    }
   }
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
-      <h1 className="text-2xl font-semibold">Regenerar plan</h1>
-      <p className="text-sm text-muted-foreground">Ejecutaremos los pasos de forma automática y te mostraremos el progreso.</p>
+      <h1 className="text-2xl font-semibold">Exportar plan</h1>
+      <p className="text-sm text-muted-foreground">Descarga un PDF con tu último consejo y resumen de objetivos.</p>
 
-      {/* Steps */}
-      <div className="space-y-3">
-        <StepItem title="Generar consejo" status={stepAdvice} />
-        <StepItem title="Guardar plan de comidas" status={stepPlan} />
-        <StepItem title="Guardar hidratación" status={stepHydration} />
-      </div>
-
-      {/* Logs */}
-      <div className="rounded border p-3 bg-muted/30 text-sm max-h-56 overflow-auto">
-        {log.map((l, i) => (
-          <div key={i} className="py-0.5">• {l}</div>
-        ))}
-        {log.length === 0 && <div className="text-muted-foreground">Preparando…</div>}
-      </div>
-
-      {/* Preview printable */}
-      <div ref={printableRef} className="rounded border p-4">
-        <h2 className="font-medium mb-2">Resumen regenerado</h2>
-        <div className="text-sm text-muted-foreground mb-2">Este bloque se usará al imprimir/guardar como PDF.</div>
-        <div className="space-y-2 text-sm">
-          <div>Items de comidas: {result?.items?.length ?? 0}</div>
-          {typeof result?.litros === "number" && <div>Objetivo de agua: {result.litros} L</div>}
+      <div className="rounded border p-4 space-y-3">
+        <div className="font-medium">Consejo</div>
+        <div className="whitespace-pre-wrap text-sm min-h-[120px]">
+          {loading ? "Cargando…" : (advice || "No hay contenido disponible.")}
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-wrap gap-2">
-        <button onClick={run} disabled={stepAdvice === "running" || stepPlan === "running" || stepHydration === "running"} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm disabled:opacity-50">Reintentar</button>
-        <button onClick={() => router.push("/dashboard/plan")} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm">Ver plan</button>
-        <button onClick={printPDF} disabled={!allOk} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm disabled:opacity-50">
-          {allOk ? "Descargar PDF" : "Descargar PDF (cuando termine)"}
-        </button>
+      <div className="rounded border p-4 space-y-3">
+        <div className="font-medium">Resumen</div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm text-muted-foreground">
+          <div><span className="text-foreground">Kcal:</span> {summary?.summary?.kcal_objetivo ?? summary?.objetivos?.kcal ?? "-"}</div>
+          <div><span className="text-foreground">Proteínas:</span> {summary?.summary?.proteinas_g ?? summary?.objetivos?.proteinas ?? "-"}</div>
+          <div><span className="text-foreground">Grasas:</span> {summary?.summary?.grasas_g ?? summary?.objetivos?.grasas ?? "-"}</div>
+          <div><span className="text-foreground">Carbohidratos:</span> {summary?.summary?.carbohidratos_g ?? summary?.objetivos?.carbohidratos ?? "-"}</div>
+          <div><span className="text-foreground">Agua:</span> {summary?.summary?.agua_litros_obj ?? summary?.objetivos?.agua_litros ?? "-"}</div>
+          {typeof mealsCount === "number" && <div><span className="text-foreground">Comidas sugeridas:</span> {mealsCount}</div>}
+        </div>
       </div>
-    </div>
-  );
-}
 
-function StepItem({ title, status }: { title: string; status: Step }) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="h-2.5 w-2.5 rounded-full"
-        style={{
-          backgroundColor:
-            status === "ok" ? "#10b981" : status === "error" ? "#ef4444" : status === "running" ? "#f59e0b" : "#d1d5db",
-        }}
-      />
-      <div className="text-sm">
-        <span className="font-medium">{title}</span>
-        <span className="ml-2 text-muted-foreground">
-          {status === "ok" ? "completado" : status === "error" ? "error" : status === "running" ? "en progreso" : "pendiente"}
-        </span>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={downloadPdf} disabled={loading} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm disabled:opacity-50">
+          Descargar PDF
+        </button>
+        <button onClick={() => router.push("/dashboard/plan")} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm">Ver plan</button>
       </div>
     </div>
   );

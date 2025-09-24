@@ -63,54 +63,60 @@ export default function ProfileMealsPage() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Plan de comidas</CardTitle>
-        <CardDescription>Definido automáticamente por la IA • Configura tus horarios</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-5 text-sm">
-          <p className="text-muted-foreground">
-            Tu planificación diaria de comidas es generada por nuestro modelo de IA. Puedes ajustar aquí los <strong>horarios</strong> a tu preferencia; estos permanecerán fijos hasta que los cambies.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {ORDER.map((tipo) => (
-              <div key={tipo} className="space-y-1">
-                <Label htmlFor={`h-${tipo}`}>{tipo}</Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id={`h-${tipo}`}
-                    type="time"
-                    value={hours[tipo] || ""}
-                    onChange={(e) => setHours((prev) => ({ ...prev, [tipo]: e.target.value }))}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={loading || !/^\d{2}:\d{2}$/.test(hours[tipo] || "")}
-                    onClick={() => ensureConfirmed(async () => {
-                      try {
-                        await save(tipo, hours[tipo]!);
-                        toast.success(`${tipo}: guardado`);
-                      } catch {
-                        toast.error(`${tipo}: error al guardar`);
-                      }
-                    })}
-                  >
-                    Guardar
-                  </Button>
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-2xl font-semibold">Plan de comidas</h1>
+        <p className="text-sm text-muted-foreground">Definido automáticamente por la IA • Configura tus horarios</p>
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Horarios diarios</CardTitle>
+          <CardDescription>Ajusta el horario de cada comida según tu rutina.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-5 text-sm">
+            <p className="text-muted-foreground">
+              Tu planificación diaria de comidas es generada por nuestro modelo de IA. Puedes ajustar aquí los <strong>horarios</strong> a tu preferencia; estos permanecerán fijos hasta que los cambies.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {ORDER.map((tipo) => (
+                <div key={tipo} className="space-y-1">
+                  <Label htmlFor={`h-${tipo}`}>{tipo}</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id={`h-${tipo}`}
+                      type="time"
+                      value={hours[tipo] || ""}
+                      onChange={(e) => setHours((prev) => ({ ...prev, [tipo]: e.target.value }))}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={loading || !/^\d{2}:\d{2}$/.test(hours[tipo] || "")}
+                      onClick={() => ensureConfirmed(async () => {
+                        try {
+                          await save(tipo, hours[tipo]!);
+                          toast.success(`${tipo}: guardado`);
+                        } catch {
+                          toast.error(`${tipo}: error al guardar`);
+                        }
+                      })}
+                    >
+                      Guardar
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <Button onClick={() => ensureConfirmed(saveAll)} disabled={saving || loading}>{saving ? "Guardando…" : "Guardar todos"}</Button>
+              <span className="text-xs text-muted-foreground">Puedes ver el plan en <Link href="/dashboard/plan" className="underline">Plan</Link> o registrar comidas en el <Link href="/dashboard" className="underline">Dashboard</Link>.</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2 pt-2">
-            <Button onClick={() => ensureConfirmed(saveAll)} disabled={saving || loading}>{saving ? "Guardando…" : "Guardar todos"}</Button>
-            <span className="text-xs text-muted-foreground">Puedes ver el plan en <Link href="/dashboard/plan" className="underline">Plan</Link> o registrar comidas en el <Link href="/dashboard" className="underline">Dashboard</Link>.</span>
-          </div>
-        </div>
-        <Toaster richColors />
-        {pwdDialog}
-      </CardContent>
-    </Card>
+          <Toaster richColors />
+          {pwdDialog}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

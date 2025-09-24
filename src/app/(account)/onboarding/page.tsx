@@ -1,11 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
-import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { CheckCircle, Sparkles, ChartLine } from "lucide-react";
+import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
+import OnboardingHeader from "@/components/onboarding/OnboardingHeader";
+import OnboardingActions from "@/components/onboarding/OnboardingActions";
+import { OnboardingCard } from "@/components/onboarding/OnboardingCard";
 
 const slides = [
   {
@@ -30,33 +32,15 @@ const slides = [
 
 export default function OnboardingPage() {
   const router = useRouter();
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/auth/onboarding/status");
-        if (res.status === 401) {
-          if (!cancelled) router.replace("/auth/login");
-          return;
-        }
-        if (!res.ok) return;
-        const { step } = await res.json();
-        if (!cancelled && step && step !== "sex") {
-          router.replace(`/onboarding/${step}`);
-        }
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [router]);
 
   function goNext() {
     router.push("/onboarding/sex");
   }
 
   return (
-    <div className="min-h-svh flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-2xl">
-        <h1 className="text-2xl font-semibold text-center mb-6">Bienvenido a FitBalance</h1>
+    <OnboardingLayout>
+      <OnboardingHeader title="Bienvenido a FitBalance" />
+      <OnboardingCard>
         <div className="relative">
           <Carousel className="w-full">
             <CarouselPrevious />
@@ -78,12 +62,8 @@ export default function OnboardingPage() {
             <CarouselNext />
           </Carousel>
         </div>
-        <div className="mt-8 grid gap-3">
-          <Button className="w-full" onClick={goNext}>
-            Comenzar
-          </Button>
-        </div>
-      </div>
-    </div>
+      </OnboardingCard>
+      <OnboardingActions back={null} next={{ onClick: goNext, label: "Comenzar" }} />
+    </OnboardingLayout>
   );
 }

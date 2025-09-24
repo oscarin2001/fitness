@@ -1,10 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
 import ReactCountryFlag from "react-country-flag";
 import { useState } from "react";
 import { toast } from "sonner";
+import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
+import OnboardingHeader from "@/components/onboarding/OnboardingHeader";
+import OnboardingActions from "@/components/onboarding/OnboardingActions";
+import { OnboardingCard } from "@/components/onboarding/OnboardingCard";
 
 const countries = [
   { code: "AR", name: "Argentina" },
@@ -59,13 +62,10 @@ export default function OnboardingCountryPage() {
   }
 
   return (
-    <div className="min-h-svh flex items-center justify-center p-6">
-      <div className="w-full max-w-md space-y-6">
-        <div className="-mb-2">
-          <Button variant="ghost" onClick={() => router.back()}>Volver</Button>
-        </div>
-        <h1 className="text-2xl font-semibold text-center">¿De qué país eres?</h1>
-        <div className="grid gap-2 max-h-[50vh] overflow-auto rounded-md border p-2">
+    <OnboardingLayout>
+      <OnboardingHeader title="¿De qué país eres?" />
+      <OnboardingCard>
+        <div className="grid gap-2 max-h-[50vh] overflow-auto">
           {countries.map((c) => (
             <button
               key={c.code}
@@ -83,8 +83,8 @@ export default function OnboardingCountryPage() {
             </button>
           ))}
         </div>
-        <Button type="button" className="w-full" onClick={onFinish}>Continuar</Button>
-      </div>
-    </div>
+      </OnboardingCard>
+      <OnboardingActions back={{ onClick: () => router.back() }} next={{ onClick: onFinish }} />
+    </OnboardingLayout>
   );
 }

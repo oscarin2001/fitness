@@ -10,7 +10,7 @@ import { toast } from "sonner";
 
 type MealItem = {
   id: number;
-  tipo: "Desayuno" | "Almuerzo" | "Cena" | "Snack";
+  tipo: string; // permitir variantes como Snack_manana / Snack_tarde si backend las provee
   porciones: number;
   overrides: Record<string, number> | null;
   receta: {
@@ -25,7 +25,17 @@ type MealItem = {
 
 type ComplianceRow = { id: number; fecha: string; comida_tipo: MealItem["tipo"]; cumplido: boolean };
 
-const ORDER: MealItem["tipo"][] = ["Desayuno", "Almuerzo", "Cena", "Snack"];
+const ORDER_BASE: string[] = [
+  "Desayuno",
+  "Snack_mañana",
+  "Snack_manana",
+  "Snack mañana",
+  "Almuerzo",
+  "Snack_tarde",
+  "Snack tarde",
+  "Cena",
+  "Snack",
+];
 
 export default function PlanPage() {
   const [loading, setLoading] = useState(true);
@@ -37,11 +47,60 @@ export default function PlanPage() {
   const [autoGenLoading, setAutoGenLoading] = useState(false);
   const [objetivos, setObjetivos] = useState<{ kcal: number | null; proteinas: number | null; grasas: number | null; carbohidratos: number | null; agua_litros: number | null } | null>(null);
   const [hidratacion, setHidratacion] = useState<{ hoy_litros: number; objetivo_litros: number | null; completado: boolean } | null>(null);
-  const [hours, setHours] = useState<Record<string, string>>({});
+  const [hours, setHours] = useState<Record<string, string>>({}); // horario por tipo (persistido en backend)
+  const [rowHours, setRowHours] = useState<Record<string, string>>({}); // horario por fila (UI), clave tipo:idx
   // Rango de días movido a la vista de Insights
   const [hydrationNotified, setHydrationNotified] = useState(false);
 
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  // Busca una hora preestablecida para un tipo; tolera variaciones de mayúsculas y variantes Snack_* cayendo a Snack
+  function presetHourFor(tipo: string): string | null {
+    const h = (hours && typeof hours === "object") ? (hours as any)[tipo] : null;
+    if (typeof h === "string") return h;
+    const lower = String(tipo).toLowerCase();
+    if (hours && typeof hours === "object") {
+      const matchKey = Object.keys(hours).find((k) => String(k).toLowerCase() === lower);
+      if (matchKey && typeof (hours as any)[matchKey] === "string") return (hours as any)[matchKey];
+    }
+    if (/snack/.test(lower)) {
+      const snack = (hours as any)?.["Snack"] || (hours as any)?.["snack"]; // usar Snack genérico si existe
+      if (typeof snack === "string") return snack;
+      // última opción: buscan alguna clave que empiece por snack_
+      if (hours && typeof hours === "object") {
+        const anySnackKey = Object.keys(hours).find((k) => /^snack([_\s]|$)/i.test(k));
+        if (anySnackKey && typeof (hours as any)[anySnackKey] === "string") return (hours as any)[anySnackKey];
+      }
+    }
+    return null;
+  }
+
+  // Preselección por fila: si es Snack, intenta mapear la fila 0 a Snack_manana y la 1 a Snack_tarde
+  function presetHourForRow(tipo: string, idx: number): string | null {
+    if (/snack/i.test(tipo)) {
+      const prefer = idx === 0 ? ["Snack_manana", "Snack_mañana", "Snack mañana"] : ["Snack_tarde", "Snack tarde"];
+      for (const key of prefer) {
+        const v = (hours as any)?.[key];
+        if (typeof v === "string" && /^\d{2}:\d{2}$/.test(v)) return v;
+        // buscar por insensible a mayúsculas
+        const lower = key.toLowerCase();
+        const cand = Object.keys(hours || {}).find((k) => k.toLowerCase() === lower);
+        if (cand) {
+          const vv = (hours as any)[cand];
+          if (typeof vv === "string" && /^\d{2}:\d{2}$/.test(vv)) return vv;
+        }
+      }
+    }
+    return presetHourFor(tipo);
+  }
+
+  // Determina la clave de horario a guardar por fila (para distinguir Snack mañana/tarde)
+  function variantTipoForSave(tipo: string, idx: number): string {
+    if (/snack/i.test(tipo)) {
+      return idx === 0 ? "Snack_manana" : "Snack_tarde";
+    }
+    return tipo;
+  }
 
   useEffect(() => {
     (async () => {
@@ -70,6 +129,53 @@ export default function PlanPage() {
           if (schedRes.ok) {
             const sj = await schedRes.json();
             if (sj && sj.schedule && typeof sj.schedule === "object") setHours(sj.schedule);
+          }
+        } catch {}
+
+        // Fallback: completar horas desde preferencias si no están en schedule
+        try {
+          const profRes = await fetch("/api/account/profile", { cache: "no-store" });
+          if (profRes.ok) {
+            const pj = await profRes.json().catch(() => ({}));
+            let prefs = pj?.user?.preferencias_alimentos ?? null;
+            if (prefs && typeof prefs === "string") { try { prefs = JSON.parse(prefs); } catch { prefs = null; } }
+            const mh = prefs && typeof prefs === "object" ? prefs.mealHours : null;
+            if (mh && typeof mh === "object") {
+              setHours((prev) => {
+                const out = { ...prev } as Record<string, string>;
+                const get = (k: string) => {
+                  const direct = mh[k];
+                  if (typeof direct === "string") return direct;
+                  const lower = String(k).toLowerCase();
+                  const cand = Object.keys(mh).find((kk) => String(kk).toLowerCase() === lower);
+                  if (cand && typeof mh[cand] === "string") return mh[cand];
+                  return undefined;
+                };
+                // base types
+                if (!out["Desayuno"]) {
+                  const h = get("Desayuno"); if (h) out["Desayuno"] = h;
+                }
+                if (!out["Almuerzo"]) {
+                  const h = get("Almuerzo"); if (h) out["Almuerzo"] = h;
+                }
+                if (!out["Cena"]) {
+                  const h = get("Cena"); if (h) out["Cena"] = h;
+                }
+                // snack: elegir Snack o la más temprana de variantes
+                if (!out["Snack"]) {
+                  const candidates: string[] = [];
+                  const push = (k: string) => { const v = get(k); if (v) candidates.push(v); };
+                  push("Snack");
+                  push("Snack_manana"); push("Snack_mañana"); push("Snack mañana");
+                  push("Snack_tarde"); push("Snack tarde");
+                  if (candidates.length) {
+                    candidates.sort();
+                    out["Snack"] = candidates[0];
+                  }
+                }
+                return out;
+              });
+            }
           }
         } catch {}
       } catch {
@@ -129,14 +235,30 @@ export default function PlanPage() {
     }
   }
 
-  async function toggle(tipo: MealItem["tipo"]) {
+  function isValidHour(h?: string) {
+    return !!h && /^\d{2}:\d{2}$/.test(h);
+  }
+
+  function hourKey(tipo: string, idx: number) {
+    return `${tipo}:${idx}`;
+  }
+
+  async function toggle(tipo: MealItem["tipo"], idx: number) {
+    // Determinar hora efectiva para esta fila
+    const k = hourKey(tipo, idx);
+    const effectiveHour = rowHours[k] ?? presetHourForRow(tipo, idx) ?? "";
+    if (!isValidHour(effectiveHour)) {
+      toast.error(`Ingresa la hora para ${tipo} antes de marcar como cumplido`);
+      return;
+    }
+    const variantTipo = variantTipoForSave(tipo, idx);
     setSaving(tipo);
     try {
       const newVal = !compliance[tipo];
       const res = await fetch("/api/account/meal-plan/compliance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tipo, cumplido: newVal, date: todayStr, hora: hours[tipo] || undefined }),
+        body: JSON.stringify({ tipo, cumplido: newVal, date: todayStr, hora: effectiveHour }),
       });
       if (!res.ok) throw new Error();
       setCompliance((prev) => ({ ...prev, [tipo]: newVal }));
@@ -144,7 +266,7 @@ export default function PlanPage() {
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("meal:updated"));
       }
-      await saveHour(tipo, hours[tipo] || "");
+      await saveHour(variantTipo, effectiveHour);
     } catch {
       setError("No se pudo actualizar el cumplimiento");
     } finally {
@@ -169,7 +291,21 @@ export default function PlanPage() {
     setAutoGenLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/account/meal-plan/auto-generate", { method: "POST" });
+      // Leer preferencias de comidas habilitadas desde el perfil para guiar a la IA
+      let enabledMeals: any = undefined;
+      try {
+        const prefRes = await fetch("/api/account/profile", { cache: "no-store" });
+        if (prefRes.ok) {
+          const pj = await prefRes.json().catch(() => ({}));
+          enabledMeals = pj?.user?.preferencias_alimentos?.enabledMeals || undefined;
+        }
+      } catch {}
+      const body = enabledMeals ? { enabledMeals } : undefined;
+      const res = await fetch("/api/account/meal-plan/auto-generate", {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || "No se pudo generar el plan");
@@ -232,6 +368,33 @@ export default function PlanPage() {
 
       {error && <div className="text-sm text-red-600">{error}</div>}
 
+      {(() => {
+        // Mostrar aviso si falta hora en alguna comida
+        if (!items || !items.length) return null;
+        const tipos = Array.from(new Set(items.map((i) => i.tipo)));
+        const orderedTipos = [
+          ...tipos.filter((t) => ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase()))
+            .sort((a, b) => ORDER_BASE.findIndex((x) => x.toLowerCase() === a.toLowerCase()) - ORDER_BASE.findIndex((x) => x.toLowerCase() === b.toLowerCase())),
+          ...tipos.filter((t) => !ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase())),
+        ];
+        const rows: Array<{ tipo: string; idx: number }> = [];
+        for (const tipo of orderedTipos) {
+          const group = items.filter((i) => i.tipo === tipo);
+          group.forEach((_it, idx) => rows.push({ tipo, idx }));
+        }
+        const missing = rows.some(({ tipo, idx }) => {
+          const k = `${tipo}:${idx}`;
+          const effectiveHour = rowHours[k] ?? presetHourFor(tipo) ?? "";
+          return !isValidHour(effectiveHour);
+        });
+        return missing ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-800 px-3 py-2 text-sm">
+            Completa la hora en cada comida para poder marcar cumplimiento.
+          </div>
+        ) : null;
+      })()}
+
+      <div className="text-xs uppercase text-muted-foreground">Checklist del día e hidratación</div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Columna izquierda: checklist del día */}
         <div className="lg:col-span-2">
@@ -247,42 +410,82 @@ export default function PlanPage() {
                 <div className="text-sm text-muted-foreground">Aún no tienes un plan. Usa la checklist para guardar recetas por comida.</div>
               ) : (
                 <div className="space-y-4">
-                  {ORDER.filter((t) => items.some((i) => i.tipo === t)).map((tipo) => {
-                    const item = items.find((i) => i.tipo === tipo)!;
-                    return (
-                      <div key={tipo} className="rounded-lg border p-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="font-medium">{tipo}: {item.receta.nombre}</div>
+                  {(() => {
+            // Construir orden dinámico: primero por prioridad conocida, luego el resto
+            const tipos = Array.from(new Set(items.map((i) => i.tipo)));
+            const orderedTipos = [
+              ...tipos.filter((t) => ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase()))
+                .sort((a, b) => ORDER_BASE.findIndex((x) => x.toLowerCase() === a.toLowerCase()) - ORDER_BASE.findIndex((x) => x.toLowerCase() === b.toLowerCase())),
+              ...tipos.filter((t) => !ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase())),
+            ];
+            const rows: Array<{ tipo: string; item: MealItem; idx: number }> = [];
+            for (const tipo of orderedTipos) {
+              const group = items.filter((i) => i.tipo === tipo);
+              group.forEach((it, idx) => rows.push({ tipo, item: it, idx }));
+            }
+            return rows.map(({ tipo, item, idx }) => {
+              const k = hourKey(tipo, idx);
+              const effectiveHour = rowHours[k] ?? presetHourForRow(tipo, idx) ?? "";
+              return (
+                <div key={`${tipo}-${idx}`} className="rounded-lg border p-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 sm:gap-4 items-start">
+                          <div className="min-w-0">
+                            {(() => {
+                              const countSame = rows.filter(r => r.tipo === tipo).length;
+                              const baseLabel = /snack/i.test(tipo)
+                                ? (/mañana|manana/i.test(tipo) ? "Snack (mañana)" : (/tarde/i.test(tipo) ? "Snack (tarde)" : "Snack"))
+                                : tipo;
+                              const finalLabel = `${baseLabel}${(!/snack/i.test(tipo) && countSame > 1) ? ` #${idx+1}` : ""}`;
+                              return (
+                                <div className="font-medium truncate">{finalLabel}: {item.receta.nombre}</div>
+                              );
+                            })()}
                             <div className="text-xs text-muted-foreground">{item.receta.macros.kcal} kcal • P {item.receta.macros.proteinas}g • G {item.receta.macros.grasas}g • C {item.receta.macros.carbohidratos}g</div>
                             <div className="mt-1 text-xs text-muted-foreground">
-                              {item.receta.alimentos.map((a) => (
-                                <span key={a.id} className="inline-block mr-2 mb-1 rounded bg-muted px-2 py-0.5">
-                                  {a.nombre} {a.gramos}g
-                                </span>
-                              ))}
+                              <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-1">
+                                {item.receta.alimentos.map((a) => (
+                                  <span key={a.id} className="inline-block rounded bg-muted px-2 py-0.5">
+                                    {a.nombre} {a.gramos}g
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="time"
-                              className="h-9 rounded-md border px-2 text-sm"
-                              value={hours[tipo] || ""}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setHours((prev) => ({ ...prev, [tipo]: v }));
-                                if (/^\d{2}:\d{2}$/.test(v)) saveHour(tipo, v);
-                              }}
-                              aria-label={`Hora real de ${tipo}`}
-                            />
-                            <Button variant={compliance[tipo] ? "default" : "outline"} onClick={() => toggle(tipo)} disabled={saving === tipo}>
-                              {saving === tipo ? "Guardando…" : compliance[tipo] ? "Cumplido" : "Marcar cumplido"}
-                            </Button>
+                          <div className="flex items-center sm:items-start gap-2 sm:gap-2 shrink-0 sm:justify-end">
+                            <div className="flex w-full sm:w-auto items-center gap-2">
+                              <input
+                                type="time"
+                                className="h-9 rounded-md border px-2 text-sm min-w-[5.5rem] flex-none"
+                                value={effectiveHour}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setRowHours((prev) => ({ ...prev, [k]: v }));
+                                  // Si es válida la hora, persistir por tipo (API actual)
+                                  if (/^\d{2}:\d{2}$/.test(v)) {
+                                    const variantTipo = variantTipoForSave(tipo, idx);
+                                    setHours((prev) => ({ ...prev, [variantTipo]: v }));
+                                    saveHour(variantTipo, v);
+                                  }
+                                }}
+                                aria-label={`Hora real de ${tipo}${rows.filter(r=>r.tipo===tipo).length>1 ? ` #${idx+1}`: ""}`}
+                              />
+                              <Button
+                                size="sm"
+                                variant={compliance[tipo] ? "default" : "outline"}
+                                onClick={() => toggle(tipo, idx)}
+                                disabled={saving === tipo || !isValidHour(effectiveHour)}
+                                title={!isValidHour(effectiveHour) ? "Ingresa una hora (HH:MM)" : undefined}
+                                className="min-w-[9rem] sm:min-w-[9rem]"
+                              >
+                                {saving === tipo ? "Guardando…" : compliance[tipo] ? `Cumplido${isValidHour(effectiveHour) ? "" : " (hora)"}` : (isValidHour(effectiveHour) ? "Marcar cumplido" : "Ingresar hora")}
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </div>
-                    );
-                  })}
+              );
+            });
+          })()}
                 </div>
               )}
             </CardContent>
@@ -309,16 +512,24 @@ export default function PlanPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {ORDER.map((t) => {
-                      const it = items.find((i) => i.tipo === t);
-                      return (
-                        <tr key={t} className="border-t">
-                          <td className="py-2 pr-3">{t}</td>
-                          <td className="py-2 pr-3">{it ? it.receta.nombre : "—"}</td>
-                          <td className="py-2 pr-3">{compliance[t] ? "Cumplido" : "Pendiente"}</td>
-                        </tr>
-                      );
-                    })}
+                    {(() => {
+                      const tipos = Array.from(new Set(items.map((i) => i.tipo)));
+                      const orderedTipos = [
+                        ...tipos.filter((t) => ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase()))
+                          .sort((a, b) => ORDER_BASE.findIndex((x) => x.toLowerCase() === a.toLowerCase()) - ORDER_BASE.findIndex((x) => x.toLowerCase() === b.toLowerCase())),
+                        ...tipos.filter((t) => !ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase())),
+                      ];
+                      return orderedTipos.map((t: string) => {
+                        const it = items.find((i) => i.tipo === t);
+                        return (
+                          <tr key={t} className="border-t">
+                            <td className="py-2 pr-3">{t}</td>
+                            <td className="py-2 pr-3">{it ? it.receta.nombre : "—"}</td>
+                            <td className="py-2 pr-3">{compliance[t] ? "Cumplido" : "Pendiente"}</td>
+                          </tr>
+                        );
+                      });
+                    })()}
                   </tbody>
                 </table>
               )}

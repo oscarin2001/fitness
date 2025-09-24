@@ -32,13 +32,56 @@ export async function POST(request) {
     if (!allowedIds.length) return NextResponse.json({ error: "No hay alimentos guardados en tu perfil" }, { status: 400 });
     const setAllowed = new Set(allowedIds);
 
-    const MEALS = ["Desayuno", "Almuerzo", "Cena", "Snack"];
+    // Preferencias de comidas habilitadas desde el body o desde el perfil del usuario
+    let enabledMeals = null;
+    let body = null;
+    try {
+      body = await request.json();
+    } catch {}
+    const emBody = body?.enabledMeals;
+    if (emBody && typeof emBody === "object") {
+      enabledMeals = emBody;
+    } else {
+      try {
+        const u = await prisma.usuario.findUnique({ where: { id: userId }, select: { preferencias_alimentos: true } });
+        const prefs = u?.preferencias_alimentos || null;
+        const em = prefs && typeof prefs === "object" ? prefs.enabledMeals : null;
+        if (em && typeof em === "object") enabledMeals = em;
+      } catch {}
+    }
+
+    // Construir lista de comidas a generar respetando preferencias
+    // Orden sugerido: Desayuno, Snack_manana, Almuerzo, Snack_tarde, Cena
+    let MEALS = [];
+    if (enabledMeals) {
+      const map = [
+        enabledMeals.desayuno ? "Desayuno" : null,
+        enabledMeals.snack_manana || enabledMeals["snack_mañana"] ? "Snack_manana" : null,
+        enabledMeals.almuerzo ? "Almuerzo" : null,
+        enabledMeals.snack_tarde ? "Snack_tarde" : null,
+        enabledMeals.cena ? "Cena" : null,
+      ].filter(Boolean);
+      MEALS = map.length ? map : ["Desayuno", "Almuerzo", "Cena", "Snack"];
+    } else {
+      MEALS = ["Desayuno", "Almuerzo", "Cena", "Snack"];
+    }
+
     const results = [];
+    // Leer horas preferidas del usuario (si existen)
+    let mealHours = null;
+    try {
+      const u = await prisma.usuario.findUnique({ where: { id: userId }, select: { preferencias_alimentos: true } });
+      const prefs = u?.preferencias_alimentos || null;
+      const mh = prefs && typeof prefs === "object" ? prefs.mealHours : null;
+      if (mh && typeof mh === "object") mealHours = mh;
+    } catch {}
 
     for (const tipo of MEALS) {
       // Buscar recetas candidatas por tipo
+      // Soporte variantes de Snack: si el tipo incluye "Snack", aceptar recetas con tipo IN [tipo, "Snack"]
+      const tipoQuery = /snack/i.test(String(tipo)) ? { in: [String(tipo), "Snack"] } : String(tipo);
       const recetas = await prisma.receta.findMany({
-        where: { tipo, alimentos: { some: { alimentoId: { in: allowedIds } } } },
+        where: { tipo: tipoQuery, alimentos: { some: { alimentoId: { in: allowedIds } } } },
         include: { alimentos: { include: { alimento: true } } },
         orderBy: { nombre: "asc" },
       });
@@ -62,11 +105,16 @@ export async function POST(request) {
       scored.sort((a, b) => (b.matchCount - a.matchCount) || (a.kcal - b.kcal));
       const best = scored[0].receta;
 
-      // Upsert PlanComida para ese tipo
+      // Upsert PlanComida para ese tipo (soporta variantes como Snack_manana / Snack_tarde)
+      // Definir overrides inicial, respetando hora preferida si existe
+      const baseOverrides = (mealHours && mealHours[String(tipo)] && /^\d{2}:\d{2}$/.test(mealHours[String(tipo)]))
+        ? { hora: mealHours[String(tipo)] }
+        : null;
+
       const up = await prisma.planComida.upsert({
-        where: { usuarioId_comida_tipo: { usuarioId: userId, comida_tipo: tipo } },
-        update: { recetaId: best.id, porciones: 1, overrides: null },
-        create: { usuarioId: userId, comida_tipo: tipo, recetaId: best.id, porciones: 1, overrides: null },
+        where: { usuarioId_comida_tipo: { usuarioId: userId, comida_tipo: String(tipo) } },
+        update: { recetaId: best.id, porciones: 1, overrides: baseOverrides },
+        create: { usuarioId: userId, comida_tipo: String(tipo), recetaId: best.id, porciones: 1, overrides: baseOverrides },
         include: { receta: { include: { alimentos: { include: { alimento: true } } } } },
       });
 

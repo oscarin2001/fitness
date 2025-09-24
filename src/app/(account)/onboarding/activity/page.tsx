@@ -3,9 +3,12 @@
 import { useRouter } from "next/navigation";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useState } from "react";
+import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
+import OnboardingHeader from "@/components/onboarding/OnboardingHeader";
+import OnboardingActions from "@/components/onboarding/OnboardingActions";
+import { OnboardingCard } from "@/components/onboarding/OnboardingCard";
 
 const levels = [
   { key: "Sedentario", desc: "Poco o nada de ejercicio" },
@@ -37,6 +40,26 @@ export default function OnboardingActivityPage() {
         return;
       }
       if (!res.ok) throw new Error();
+
+      // Aplicar por defecto 5 comidas habilitadas (puede ajustarlo luego en meals-terms)
+      try {
+        await fetch("/api/account/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            preferencias_alimentos: {
+              enabledMeals: {
+                desayuno: true,
+                snack_manana: true,
+                almuerzo: true,
+                snack_tarde: true,
+                cena: true,
+              },
+            },
+          }),
+        });
+      } catch {}
+
       router.push("/onboarding/country");
     } catch {
       toast.error("No se pudo guardar");
@@ -44,9 +67,9 @@ export default function OnboardingActivityPage() {
   }
 
   return (
-    <div className="min-h-svh flex items-center justify-center p-6">
-      <div className="w-full max-w-md space-y-6">
-        <h1 className="text-2xl font-semibold text-center">Tu nivel de actividad</h1>
+    <OnboardingLayout>
+      <OnboardingHeader title="Tu nivel de actividad" subtitle="Selecciona el nivel que más se parece a tu rutina semanal. Esto ayuda a ajustar tus recomendaciones de dieta y ejercicio." />
+      <OnboardingCard>
         <RadioGroup value={value} onValueChange={setValue} className="grid gap-3">
           {levels.map((l) => (
             <div key={l.key} className="flex items-center gap-3 rounded-md border p-3">
@@ -58,8 +81,11 @@ export default function OnboardingActivityPage() {
             </div>
           ))}
         </RadioGroup>
-        <Button type="button" className="w-full" onClick={onNext}>Continuar</Button>
-      </div>
-    </div>
+      </OnboardingCard>
+      <OnboardingActions
+        back={{ onClick: () => router.back() }}
+        next={{ onClick: onNext }}
+      />
+    </OnboardingLayout>
   );
 }

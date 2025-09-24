@@ -264,6 +264,7 @@ export default function DashboardPage() {
         </Card>
       )}
 
+      <div className="text-xs uppercase text-muted-foreground">Resumen de hoy</div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader>
@@ -482,6 +483,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Adherencia agregada: comparación semanas/meses */}
+      <div className="text-xs uppercase text-muted-foreground">Actividad reciente</div>
       <Card>
         <CardHeader>
           <CardTitle>Comidas cumplidas</CardTitle>

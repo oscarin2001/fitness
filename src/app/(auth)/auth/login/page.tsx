@@ -3,13 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff } from "lucide-react";
@@ -83,82 +76,78 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-[80vh] flex items-center justify-center p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-2xl">FitBalance</CardTitle>
-          <CardDescription>Inicia sesión con tu cuenta</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={onSubmit} className="grid gap-6">
-            <div className="grid gap-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="tucorreo@ejemplo.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              {errors.email && <p className="text-sm text-red-600">{errors.email}</p>}
-            </div>
+  <div className="p-6 max-w-sm mx-auto space-y-6 bg-white rounded-lg border border-gray-300 shadow">
+      <div>
+        <h1 className="text-2xl font-semibold">FitBalance</h1>
+        <p className="text-sm text-muted-foreground">Inicia sesión con tu cuenta</p>
+      </div>
+  <form action="/auth/login" method="POST" onSubmit={onSubmit} className="grid gap-6">
+        <div className="grid gap-2">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            placeholder="tucorreo@ejemplo.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          {errors.email && <p className="text-sm text-red-600">{errors.email}</p>}
+        </div>
 
-            <div className="grid gap-2">
-              <div className="flex items-center">
-                <Label htmlFor="password">Contraseña</Label>
-                <a
-                  href="#"
-                  className="ml-auto inline-block text-sm underline-offset-4 hover:underline"
-                >
-                  ¿Olvidaste tu contraseña?
-                </a>
-              </div>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  placeholder="********"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                  onClick={() => setShowPassword((s) => !s)}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-              {errors.password && <p className="text-sm text-red-600">{errors.password}</p>}
-            </div>
+        <div className="grid gap-2">
+          <div className="flex items-center">
+            <Label htmlFor="password">Contraseña</Label>
+            <a
+              href="#"
+              className="ml-auto inline-block text-sm underline-offset-4 hover:underline"
+            >
+              ¿Olvidaste tu contraseña?
+            </a>
+          </div>
+          <div className="relative">
+            <Input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              placeholder="********"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button
+              type="button"
+              aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+              onClick={() => setShowPassword((s) => !s)}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+          {errors.password && <p className="text-sm text-red-600">{errors.password}</p>}
+        </div>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-              />
-              Recordarme
-            </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+          Recordarme
+        </label>
 
-            {errors.server && (
-              <div className="text-sm text-red-600">{errors.server}</div>
-            )}
+        {errors.server && (
+          <div className="text-sm text-red-600">{errors.server}</div>
+        )}
 
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Ingresando..." : "Ingresar"}
-            </Button>
+        <Button type="submit" className="w-full" disabled={loading}>
+          {loading ? "Ingresando..." : "Ingresar"}
+        </Button>
 
-            <div className="mt-2 text-center text-sm">
-              ¿No tienes cuenta?{" "}
-              <a href="/auth/register" className="underline underline-offset-4">
-                Regístrate
-              </a>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+        <div className="mt-2 text-center text-sm">
+          ¿No tienes cuenta?{" "}
+          <a href="/auth/register" className="underline underline-offset-4">
+            Regístrate
+          </a>
+        </div>
+      </form>
     </div>
   );
 }

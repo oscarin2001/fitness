@@ -8,7 +8,7 @@ import {
   NavigationMenuItem,
   NavigationMenuLink,
 } from "@/components/ui/navigation-menu";
-import { CheckCircle2, CircleDashed, Gauge, Home, UtensilsCrossed, LogOut, User, RotateCcw, Menu, Activity } from "lucide-react";
+import { CheckCircle2, CircleDashed, Gauge, Home, UtensilsCrossed, LogOut, User, Menu, Activity } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 type Summary = {
@@ -18,9 +18,9 @@ type Summary = {
 export default function AppNavbar() {
   const [hasPlan, setHasPlan] = useState(false);
   const router = useRouter();
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [avatarText, setAvatarText] = useState<string>("N");
 
   useEffect(() => {
     let abort = false;
@@ -42,47 +42,33 @@ export default function AppNavbar() {
     setMounted(true);
   }, []);
 
-  async function retryOnboardingSave() {
-    setActionLoading("retry");
-    try {
-      const adviceRes = await fetch("/api/account/advice", { method: "POST", cache: "no-store", credentials: "include" });
-      const adviceJson = await adviceRes.json();
-      if (!adviceRes.ok) {
-        throw new Error(adviceJson?.error || "Error al generar consejo");
-      }
-
-      const items = Array.isArray(adviceJson?.meals?.items) ? adviceJson.meals.items : [];
-      const litros = Number(adviceJson?.hydration?.litros);
-
-      if (items.length) {
-        const savePlan = await fetch("/api/account/onboarding/initial-plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items }),
-          credentials: "include",
-          cache: "no-store",
-        });
-        if (!savePlan.ok) throw new Error("No se pudo guardar el plan inicial");
-      }
-
-      if (litros > 0) {
-        const saveHyd = await fetch("/api/account/hydration/goal", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ litros }),
-          credentials: "include",
-          cache: "no-store",
-        });
-        if (!saveHyd.ok) throw new Error("No se pudo guardar la hidratación");
-      }
-
-      router.push("/dashboard/plan");
-    } catch (e) {
-      // opcional: mostrar toast si hay sistema de toasts
-    } finally {
-      setActionLoading(null);
-    }
-  }
+  // Cargar iniciales de nombre/apellido/email para el avatar
+  useEffect(() => {
+    let abort = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/account/profile", { cache: "no-store", credentials: "include" });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (abort) return;
+        const nombre: string = j?.user?.nombre || "";
+        const apellido: string = j?.user?.apellido || "";
+        const email: string = j?.user?.email || "";
+        const n = nombre.trim();
+        const a = apellido.trim();
+        let initials = "N";
+        if (n || a) {
+          const first = n ? n.split(/\s+/)[0] : "";
+          const lastToken = a ? a.split(/\s+/).slice(-1)[0] : (n ? n.split(/\s+/).slice(-1)[0] : "");
+          initials = ((first[0] || "") + (lastToken[0] || "")).toUpperCase() || "N";
+        } else if (email) {
+          initials = email[0].toUpperCase();
+        }
+        setAvatarText(initials);
+      } catch {}
+    })();
+    return () => { abort = true; };
+  }, []);
 
   return (
     <div className="sticky top-0 z-40 w-full border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -160,25 +146,20 @@ export default function AppNavbar() {
             <details className="group">
               <summary className="list-none cursor-pointer">
                 <div className="ml-3 size-8 rounded-full bg-foreground/90 text-background grid place-items-center text-xs">
-                  N
+                  {avatarText}
                 </div>
               </summary>
               <div className="absolute right-0 mt-2 w-48 rounded-md border bg-popover p-1 shadow-md">
                 <button
-                  onClick={() => router.push("/account")}
+                  onClick={() => router.push("/account/settings")}
                   className="w-full flex items-center gap-2 px-2 py-2 text-sm rounded hover:bg-accent"
                 >
                   <User className="h-4 w-4" /> Perfil
                 </button>
                 <button
-                  onClick={retryOnboardingSave}
-                  disabled={actionLoading === "retry"}
-                  className="w-full flex items-center gap-2 px-2 py-2 text-sm rounded hover:bg-accent"
-                >
-                  <RotateCcw className="h-4 w-4" /> {actionLoading === "retry" ? "Reintentando…" : "Reintentar"}
-                </button>
-                <button
                   onClick={async () => {
+                    const ok = window.confirm("¿Deseas cerrar sesión?");
+                    if (!ok) return;
                     try {
                       await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
                     } catch {}

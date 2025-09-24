@@ -43,6 +43,8 @@ export async function middleware(req: NextRequest) {
   }
   const isLoggedIn = !!tokenPayload;
 
+  // Logs de depuración removidos para evitar ruido en la terminal
+
   // 1. Manejar rutas públicas (no protegidas)
   const isProtectedRoute = routePermissions.some(({ route }) =>
     convertToRegex(route).test(pathname)
@@ -53,6 +55,10 @@ export async function middleware(req: NextRequest) {
     const onboarded = req.cookies.get("onboarded")?.value === "true";
     let firstLoginCookie = req.cookies.get("first_login")?.value === "true";
     if (onboarded) firstLoginCookie = false; // estado definitivo
+    // Evitar redirecciones para rutas de API (permitir llamadas API durante onboarding)
+    if (pathname.startsWith("/api")) {
+      return NextResponse.next();
+    }
     if (isLoggedIn && firstLoginCookie && !pathname.startsWith("/onboarding")) {
       return NextResponse.redirect(new URL("/onboarding", req.url));
     }
