@@ -485,15 +485,21 @@ export default function PlanPage() {
     const selected = new Date(selectedDate);
     const todayIso = isoDate(today);
     const isToday = selectedDate === todayIso;
-    const dayName = new Intl.DateTimeFormat('es-ES', { weekday: 'long' }).format(selected);
+    let dayName = new Intl.DateTimeFormat('es-ES', { weekday: 'long' }).format(selected); // normalmente en minúsculas
     const formatted = new Intl.DateTimeFormat('es-ES', { year: 'numeric', month: 'long', day: 'numeric' }).format(selected);
-    return isToday ? `Hoy es ${dayName}, ${formatted}` : `${dayName}, ${formatted}`;
+    if (isToday) {
+      // Requisito: "Hoy es viernes, 26 de septiembre de 2025" (dayName en minúsculas)
+      return `Hoy es ${dayName}, ${formatted}`;
+    }
+    // Requisito en otra fecha: "Jueves, 25 de septiembre de 2025" (primera letra mayúscula)
+    if (dayName.length) dayName = dayName.charAt(0).toUpperCase() + dayName.slice(1);
+    return `${dayName}, ${formatted}`;
   }, [selectedDate, today]);
 
   return (
     <div className="p-6 space-y-6">
-      {/* Fecha actual arriba (informativa) */}
-      <div className="text-xs text-muted-foreground">Hoy es {nowHuman}</div>
+      {/* Encabezado dinámico de fecha seleccionada */}
+      <div className="text-sm font-medium" data-testid="selected-date-heading">{formattedDate}</div>
       <div className="flex items-start justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold">Plan de comidas</h1>
@@ -505,20 +511,31 @@ export default function PlanPage() {
 
       {error && <div className="text-sm text-red-600">{error}</div>}
 
-      {/* Tira de fechas (semana actual) */}
+      {/* Selector de semana (día arriba abreviado, número abajo) */}
       <div className="-mx-2 px-2">
         <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
           {weekDates.map(d => {
             const isSelected = d.iso === selectedDate;
+            const isToday = d.iso === todayStr;
+            const [rawAbbr, rawNum] = d.label.split(" ");
+            // Normalizar abreviatura: capitalizar primera letra, mantener tilde si existe
+            let abbr = rawAbbr ? rawAbbr.replace('.', '') : '';
+            if (abbr.length) abbr = abbr.charAt(0).toUpperCase() + abbr.slice(1);
+            const dayNum = rawNum || '';
             return (
               <button
                 key={d.iso}
                 onClick={() => setSelectedDate(d.iso)}
-                className={`shrink-0 rounded-full px-3 py-1.5 text-sm border ${isSelected ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 text-foreground border-muted'}`}
+                className={[
+                  'shrink-0 w-12 h-14 flex flex-col items-center justify-center rounded-md border transition-colors text-xs',
+                  isSelected ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/40 text-foreground border-muted',
+                  !isSelected && isToday ? 'ring-2 ring-primary/60 ring-offset-1' : '',
+                ].join(' ')}
                 aria-pressed={isSelected}
                 aria-label={`Ver plan del ${d.label}`}
               >
-                {d.label}
+                <span className="block leading-none text-[11px] font-medium">{abbr}</span>
+                <span className="block leading-tight text-sm font-semibold">{dayNum}</span>
               </button>
             );
           })}
