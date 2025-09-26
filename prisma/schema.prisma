@@ -48,6 +48,7 @@ model Usuario {
   cumplimientos_dieta   CumplimientoDieta[] // Relación con el modelo CumplimientoDieta
   // Alimentos elegidos en onboarding
   alimentos_seleccion    UsuarioAlimento[]
+  bebidas_plan           UsuarioBebida[]
   // Preferencia: intervalo de semanas entre mediciones corporales (2-4 sugerido)
   measurement_interval_weeks Int?
   // Campo para almacenar los días de dieta/entrenamiento
@@ -70,6 +71,7 @@ model Alimento {
   id            Int              @id @default(autoincrement())
   nombre        String
   categoria     String?
+  categoria_enum AlimentoCategoria?
   calorias      Float?
   proteinas     Float?
   carbohidratos Float?
@@ -79,6 +81,7 @@ model Alimento {
   comidas       Comida[]
   recetas       RecetaAlimento[]
   usuarios      UsuarioAlimento[]
+  usuario_bebidas UsuarioBebida[]
 }
 
 model Receta {
@@ -197,9 +200,23 @@ model UsuarioAlimento {
   alimento    Alimento  @relation(fields: [alimentoId], references: [id])
   alimentoId  Int
   categoria   String?
+  categoria_enum AlimentoCategoria?
   prioridad   Int?
 
   @@unique([usuarioId, alimentoId])
+}
+
+// Plan diario de bebidas sugeridas (volúmenes concretos no mezclados con agua total objetivo)
+model UsuarioBebida {
+  id        Int      @id @default(autoincrement())
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id])
+  usuarioId Int
+  bebida    Alimento @relation(fields: [bebidaId], references: [id])
+  bebidaId  Int
+  ml        Int      // porción en mililitros (cada entrada ≤250ml)
+  momento   String?  // Desayuno | Almuerzo | Cena | Snack | General
+
+  @@index([usuarioId])
 }
 
 enum Objetivo {
@@ -227,4 +244,14 @@ enum VelocidadCambio {
   Rapido
   Moderado
   Lento
+}
+
+// Categorías tipadas para alimentos/selecciones de usuario
+enum AlimentoCategoria {
+  Proteinas
+  Carbohidratos
+  Fibras
+  Snacks
+  Grasos
+  BebidasInfusiones
 }

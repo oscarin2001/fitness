@@ -29,19 +29,37 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     const summary = body?.summary || null;
     const advice = body?.advice || null;
+    const beverages = Array.isArray(body?.beverages) ? body.beverages : null; // [{nombre, ml, momento}]
+    const weekly = Array.isArray(body?.weekly) ? body.weekly : null; // vista semanal final [{ day, active, meals: [...] }]
     const aguaLitros = body?.agua_litros_obj;
 
     const data = {};
     if (summary && typeof summary === "object") {
-      if (typeof summary.kcal_objetivo === "number") data.kcal_objetivo = summary.kcal_objetivo;
-      if (typeof summary.proteinas_g === "number") data.proteinas_g_obj = summary.proteinas_g;
-      if (typeof summary.grasas_g === "number") data.grasas_g_obj = summary.grasas_g;
-      if (typeof summary.carbohidratos_g === "number") data.carbohidratos_g_obj = summary.carbohidratos_g;
+      const kcal = Number(summary.kcal_objetivo);
+      const prot = Number(summary.proteinas_g);
+      let grasas = Number(summary.grasas_g);
+      let carbos = Number(summary.carbohidratos_g);
+      if (Number.isFinite(kcal) && kcal > 0) {
+        if (!Number.isFinite(grasas) || grasas <= 0) {
+          grasas = Math.max(0, Math.round((kcal * 0.25) / 9));
+        }
+        if (!Number.isFinite(carbos) || carbos <= 0) {
+          if (Number.isFinite(prot) && prot > 0) {
+            carbos = Math.max(0, Math.round((kcal - (prot * 4) - (grasas * 9)) / 4));
+          }
+        }
+      }
+      if (Number.isFinite(kcal)) data.kcal_objetivo = kcal;
+      if (Number.isFinite(prot)) data.proteinas_g_obj = prot;
+      if (Number.isFinite(grasas)) data.grasas_g_obj = grasas;
+      if (Number.isFinite(carbos)) data.carbohidratos_g_obj = carbos;
     }
     if (typeof aguaLitros === "number") data.agua_litros_obj = aguaLitros;
 
-    if (advice || summary) {
+    if (advice || summary || beverages || weekly) {
       data.plan_ai = { advice: advice || null, summary: summary || null };
+      if (beverages) data.plan_ai.beverages = { items: beverages };
+      if (weekly) data.plan_ai.weekly = weekly;
     }
 
     if (Object.keys(data).length === 0) {

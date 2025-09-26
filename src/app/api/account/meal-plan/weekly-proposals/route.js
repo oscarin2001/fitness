@@ -42,6 +42,186 @@ function normalizeMeals(enabled) {
   return out.length ? out : ["Desayuno", "Almuerzo", "Cena", "Snack"]; // fallback
 }
 
+export async function GET(request) {
+  try {
+    const userId = await getUserIdFromRequest(request);
+    if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
+    // Usar los mismos parámetros por defecto que en POST
+    const body = {};
+    let daysSelected = null;
+    const mealsSelection = null;
+
+    // Leer enabledMeals del perfil como default
+    let enabledMeals = mealsSelection;
+    try {
+      if (!enabledMeals) {
+        const u = await prisma.usuario.findUnique({ where: { id: userId }, select: { preferencias_alimentos: true } });
+        const prefs = u?.preferencias_alimentos || null;
+        const em = prefs && typeof prefs === "object" ? prefs.enabledMeals : null;
+        if (em && typeof em === "object") enabledMeals = em;
+      }
+    } catch {}
+
+    const MEAL_TYPES = normalizeMeals(enabledMeals || {});
+
+    // Leer perfil para objetivos y preferencias
+    let user = null;
+    try {
+      user = await prisma.usuario.findUnique({ where: { id: userId } });
+    } catch {}
+    // Determinar días desde el perfil si no fueron provistos
+    if (!daysSelected || daysSelected.length === 0) {
+      const userDays = Array.isArray(user?.dias_dieta) ? user.dias_dieta.filter((d) => typeof d === 'string') : [];
+      if (userDays.length >= 5) {
+        daysSelected = userDays;
+      }
+    }
+    // Validar días seleccionados (min 5) o usar todos los 7 por defecto
+    if (!daysSelected || daysSelected.length < 5) {
+      daysSelected = [...WEEK_DAYS];
+    }
+    const pesoKg = Number(user?.peso_kg) || null;
+    const objetivo = user?.objetivo || null; // Bajar_grasa | Mantenimiento | Ganar_musculo
+    const prefsPA = (user?.preferencias_alimentos && typeof user.preferencias_alimentos === 'object') ? user.preferencias_alimentos : {};
+    let proteinRange = (prefsPA?.proteinRangeKg && typeof prefsPA.proteinRangeKg === 'object') ? prefsPA.proteinRangeKg : null;
+    if (!proteinRange) {
+      const byGoal = {
+        Bajar_grasa: [1.2, 1.6],
+        Mantenimiento: [1.6, 1.8],
+        Ganar_musculo: [1.8, 2.0],
+      };
+      proteinRange = byGoal[objetivo] ? { min: byGoal[objetivo][0], max: byGoal[objetivo][1] } : { min: 1.6, max: 1.8 };
+    }
+    const proteinDailyTarget = Number(user?.proteinas_g_obj) || (pesoKg ? Math.round(((proteinRange.min + proteinRange.max) / 2) * pesoKg) : null);
+    const objectiveLabel = objetivo === 'Bajar_grasa' ? 'Bajar de peso' : (objetivo === 'Ganar_musculo' ? 'Subir masa muscular' : (objetivo ? 'Mantener peso' : 'Objetivo'));
+
+    // Alimentos permitidos del usuario
+    const rows = await prisma.usuarioAlimento.findMany({ where: { usuarioId: userId }, select: { alimentoId: true } });
+    const allowedIds = rows.map((r) => r.alimentoId);
+    const setAllowed = new Set(allowedIds);
+
+    // Función para obtener hasta N recetas ordenadas por score para un tipo
+    async function topNRecipesForType(tipo, N = 50) {
+      const tipoEnum = mapTipoToEnum(tipo);
+      const where = {};
+      if (tipoEnum) {
+        where.tipo = tipoEnum;
+      }
+      if (Array.isArray(allowedIds) && allowedIds.length > 0) {
+        where.alimentos = { some: { alimentoId: { in: allowedIds } } };
+      }
+      const recetas = await prisma.receta.findMany({
+        where,
+        include: { alimentos: { include: { alimento: true } } },
+        orderBy: { nombre: "asc" },
+        take: Math.max(N, 50),
+      });
+      if (!recetas.length) return [];
+      const scored = recetas.map((r) => {
+        const matchCount = r.alimentos.reduce((acc, ra) => acc + (setAllowed.has(ra.alimentoId) ? 1 : 0), 0);
+        let kcal = 0;
+        for (const ra of r.alimentos) {
+          const factor = (ra.gramos || 0) / 100;
+          const alim = ra.alimento; if (!alim) continue;
+          kcal += (alim.calorias || 0) * factor;
+        }
+        return { receta: r, score: matchCount * 1000 - kcal };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      const picked = [];
+      const seen = new Set();
+      for (const sc of scored) {
+        if (picked.length >= N) break;
+        if (seen.has(sc.receta.id)) continue;
+        picked.push(sc.receta);
+        seen.add(sc.receta.id);
+      }
+      return picked;
+    }
+
+    // Calcular índice de semana para variar a través del tiempo (UTC)
+    const now = new Date();
+    const weekIdx = Math.floor((Date.UTC(now.getUTCFullYear(), 0, 1) - Date.UTC(1970,0,1)) / (7*24*3600*1000) + (now.getTime() - now.getTimezoneOffset()*60000) / (7*24*3600*1000));
+
+    // Construir 3 propuestas base para compatibilidad (top3 por tipo)
+    const proposals = [0,1,2].map(() => ({}));
+    // También preparar picks por día (hasta 7 distintos) por tipo
+    const perTypePicks = {};
+    for (const tipo of MEAL_TYPES) {
+      const pool = await topNRecipesForType(tipo, 50);
+      const seed = hashStr(`${userId}|${tipo}|${weekIdx}`);
+      const shuffled = shuffleDeterministic(pool, seed);
+      const distinct = [];
+      const seen = new Set();
+      for (const r of shuffled) {
+        if (seen.has(r.id)) continue;
+        seen.add(r.id);
+        distinct.push(r);
+        if (distinct.length >= 7) break;
+      }
+      // para proposals, tomar los primeros 3 del pool ordenado por score (o de distinct si no hay suficientes)
+      const top3 = pool.slice(0, 3).length === 3 ? pool.slice(0,3) : distinct.slice(0,3);
+      while (top3.length < 3) top3.push(...distinct);
+      for (let i = 0; i < 3; i++) {
+        proposals[i][tipo] = top3[i % top3.length];
+      }
+      perTypePicks[tipo] = distinct.length ? distinct : pool;
+      // Log de depuración: cuántas recetas únicas por tipo
+      try {
+        console.debug(`[weekly-proposals] tipo=${tipo} pool=${pool.length} uniqueForWeek=${perTypePicks[tipo].length}`);
+      } catch {}
+    }
+
+    // Rotación semanal: L-J -> var0, M-V -> var1, Mi-S -> var2, D -> var3 (distinto)
+    const rotation = {
+      "Lunes": 0,
+      "Jueves": 0,
+      "Martes": 1,
+      "Viernes": 1,
+      "Miércoles": 2,
+      "Sábado": 2,
+      "Domingo": 3,
+    };
+
+    const weekly = WEEK_DAYS.map((day) => {
+      const active = daysSelected.includes(day);
+      if (!active) {
+        // Día libre: no generar menú
+        return { day, active, objectiveLabel, proteinDailyTarget, meals: [] };
+      }
+      // Seleccionar una receta distinta por tipo para este día usando índice de rotación
+      const rotIdx = rotation[day] ?? 0;
+      const split = proteinSplit(MEAL_TYPES);
+      const meals = MEAL_TYPES.map((t) => {
+        const picks = perTypePicks[t] || [];
+        let receta = null;
+        if (picks.length) {
+          if (day === "Domingo" && picks.length >= 2) {
+            // Intentar un menú distinto a los de rotIdx 0,1,2
+            const avoid = new Set([0,1,2].map(i => picks[i % picks.length]?.id).filter(Boolean));
+            receta = picks.find(r => r && !avoid.has(r.id)) || picks[rotIdx % picks.length];
+          } else {
+            receta = picks[rotIdx % picks.length];
+          }
+        }
+        const targetProteinG = proteinDailyTarget ? Math.round(proteinDailyTarget * (split.find((x) => x.tipo === t)?.share || (1 / MEAL_TYPES.length))) : null;
+        const itemsText = receta ? buildItemsText(receta) : [];
+        return { tipo: t, receta: receta ? { id: receta.id, nombre: receta.nombre } : null, targetProteinG, itemsText };
+      });
+      return { day, active, objectiveLabel, proteinDailyTarget, meals };
+    });
+
+    return NextResponse.json({
+      proposals: proposals.map((p, i) => ({ index: i, meals: Object.entries(p).map(([tipo, receta]) => ({ tipo, receta: receta ? { id: receta.id, nombre: receta.nombre } : null })) })),
+      weekly,
+      protein: { targetDailyG: proteinDailyTarget, rangeKg: proteinRange, objective: objetivo },
+    });
+  } catch (e) {
+    console.error("/api/account/meal-plan/weekly-proposals error", e);
+    return NextResponse.json({ error: "Error del servidor" }, { status: 500 });
+  }
+}
 export async function POST(request) {
   try {
     const userId = await getUserIdFromRequest(request);
@@ -318,3 +498,4 @@ export async function POST(request) {
     return NextResponse.json({ error: "Error del servidor" }, { status: 500 });
   }
 }
+

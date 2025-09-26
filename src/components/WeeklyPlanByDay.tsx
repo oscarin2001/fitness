@@ -22,7 +22,9 @@ export type WeeklyDay = {
   }>;
 };
 
-export default function WeeklyPlanByDay({ weekly, className, schedule }: { weekly: WeeklyDay[]; className?: string; schedule?: Record<string, string> | null }) {
+type BeverageItem = { nombre: string; ml: number; momento?: string | null };
+
+export default function WeeklyPlanByDay({ weekly, className, schedule, beverages }: { weekly: WeeklyDay[]; className?: string; schedule?: Record<string, string> | null; beverages?: BeverageItem[] | null }) {
   const days = useMemo(() => (Array.isArray(weekly) ? weekly : []), [weekly]);
   const [sel, setSel] = useState(() => Math.max(0, days.findIndex((d) => d?.active)));
   const [showPortions] = useState(false); // eliminado features de botones
@@ -79,6 +81,25 @@ export default function WeeklyPlanByDay({ weekly, className, schedule }: { weekl
                   {d.meals!.map((m, i) => {
                     const key = String(m.tipo);
                     const t = schedule && typeof schedule === 'object' ? (schedule[key] || (key === 'Snack_manana' ? schedule['Snack'] : (key === 'Snack_tarde' ? schedule['Snack'] : schedule[key]))) : null;
+                    // Filtrar bebidas que correspondan a este momento (Desayuno, Almuerzo, Cena, Snack)
+                    const normTipo = ((): string => {
+                      const s = key.toLowerCase();
+                      if (s.startsWith('desayuno')) return 'desayuno';
+                      if (/almuerzo|comida|lunch/.test(s)) return 'almuerzo';
+                      if (s.startsWith('cena') || /dinner/.test(s)) return 'cena';
+                      if (s.startsWith('snack')) return 'snack';
+                      return s;
+                    })();
+                    const bevList = Array.isArray(beverages)
+                      ? beverages.filter(b => {
+                          const mom = (b.momento || '').toString().toLowerCase();
+                          if (!mom) return false;
+                          if (mom === 'general') return false; // se mostrará al final
+                          // Igualar cualquier snack variant
+                          if (mom === 'snack' && normTipo === 'snack') return true;
+                          return mom === normTipo;
+                        })
+                      : [];
                     return (
                       <div key={i} className="grid grid-cols-[9rem_1fr] gap-2 items-start">
                         <div className="text-muted-foreground leading-snug pr-2">
@@ -101,10 +122,27 @@ export default function WeeklyPlanByDay({ weekly, className, schedule }: { weekl
                               ))}
                             </ul>
                           )}
+                          {bevList.length > 0 && (
+                            <ul className="mt-1 list-disc pl-5 space-y-0.5 text-muted-foreground">
+                              {bevList.map((b, bi) => (
+                                <li key={bi}>{b.nombre} ({b.ml} ml)</li>
+                              ))}
+                            </ul>
+                          )}
                         </div>
                       </div>
                     );
                   })}
+                  {Array.isArray(beverages) && beverages.some(b => (b.momento || '').toLowerCase() === 'general') && (
+                    <div className="pt-3 border-t mt-4">
+                      <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Bebidas generales</div>
+                      <ul className="list-disc pl-5 space-y-0.5 text-muted-foreground text-sm">
+                        {beverages.filter(b => (b.momento || '').toLowerCase() === 'general').map((b,i) => (
+                          <li key={i}>{b.nombre} ({b.ml} ml)</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

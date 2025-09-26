@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -10,12 +10,122 @@ import OnboardingActions from "@/components/onboarding/OnboardingActions";
 import { OnboardingCard } from "@/components/onboarding/OnboardingCard";
 import WeeklyPlanByDay from "@/components/WeeklyPlanByDay";
 import { useMemo } from "react";
+import { Clipboard, Download } from "lucide-react";
+
+function num(n: any): number | null {
+  if (typeof n === 'number' && Number.isFinite(n)) return n;
+  if (typeof n === 'string') {
+    // Extraer primer número (con signo opcional y decimales) de cadenas tipo "2637 kcal/día"
+    const m = n.replace(',', '.').match(/-?\d+(?:\.\d+)?/);
+    if (m) {
+      const v = Number(m[0]);
+      return Number.isFinite(v) ? v : null;
+    }
+  }
+  const v = Number(n);
+  return Number.isFinite(v) ? v : null;
+}
+
+function normalizeSummary(raw: any | null, profile?: any | null) {
+  if (!raw || typeof raw !== 'object') return null as any;
+  const s: any = { ...raw };
+  const pick = (...keys: string[]) => {
+    for (const k of keys) {
+      const v = (s as any)[k];
+      const n = num(v);
+      if (n != null) return n;
+    }
+    return null;
+  };
+  const out: any = {};
+  out.tmb = pick('tmb','TMB','TMB_kcal','tmb_kcal');
+  out.tdee = pick('tdee','TDEE','tdee_kcal','TDEE_kcal');
+  out.kcal_objetivo = pick('kcal_objetivo','kcal','calorias','calorias_objetivo');
+  out.deficit_superavit_kcal = pick('deficit_superavit_kcal','deficit_kcal','superavit_kcal','deficit');
+  out.ritmo_peso_kg_sem = pick('ritmo_peso_kg_sem','ritmo_kg_sem','rate_kg_week');
+  out.proteinas_g = pick('proteinas_g','proteina_g','proteinas','protein_g');
+  out.grasas_g = pick('grasas_g','grasas','fat_g','grasas_diarias_g');
+  out.carbohidratos_g = pick('carbohidratos_g','carbohidratos','carbs_g','carbohidratos_diarios_g');
+
+  // 1) Completar kcal si hay TDEE y déficit/superávit
+  if (out.kcal_objetivo == null && out.tdee != null && out.deficit_superavit_kcal != null) {
+    out.kcal_objetivo = Math.round(out.tdee - out.deficit_superavit_kcal);
+  }
+  // 1b) Completar kcal desde macros si están los 3
+  if (out.kcal_objetivo == null && out.proteinas_g != null && out.grasas_g != null && out.carbohidratos_g != null) {
+    out.kcal_objetivo = Math.max(0, Math.round(out.proteinas_g * 4 + out.grasas_g * 9 + out.carbohidratos_g * 4));
+  }
+  // 1c) Completar kcal desde TDEE con heurística por objetivo/velocidad si aún falta
+  if (out.kcal_objetivo == null && out.tdee != null) {
+    const objetivo = String(profile?.objetivo || '').toLowerCase();
+    const vel = String(profile?.velocidad_cambio || '').toLowerCase();
+    let delta = 0;
+    if (/bajar/.test(objetivo)) {
+      // Déficit recomendado
+      if (/lento/.test(vel)) delta = -450;
+      else if (/medio|moderad/.test(vel)) delta = -500;
+      else if (/rápid|rapid/.test(vel)) delta = -700;
+      else delta = -500; // por defecto
+    } else if (/ganar|muscul|subir/.test(objetivo)) {
+      // Superávit recomendado
+      if (/lento/.test(vel)) delta = 250;
+      else if (/medio|moderad/.test(vel)) delta = 350;
+      else if (/rápid|rapid/.test(vel)) delta = 500;
+      else delta = 300;
+    } else {
+      delta = 0; // Mantener
+    }
+    out.kcal_objetivo = Math.max(0, Math.round(out.tdee + delta));
+  }
+
+  // 2) Completar macros faltantes con heurística si ya hay kcal
+  if (out.kcal_objetivo != null) {
+    if (out.grasas_g == null) out.grasas_g = Math.max(0, Math.round((out.kcal_objetivo * 0.25) / 9));
+    if (out.proteinas_g != null && out.carbohidratos_g == null) {
+      out.carbohidratos_g = Math.max(0, Math.round((out.kcal_objetivo - (out.proteinas_g * 4) - (out.grasas_g * 9)) / 4));
+    }
+  }
+
+  // 3) Completar déficit si falta y hay TDEE + kcal objetivo
+  if (out.deficit_superavit_kcal == null && out.tdee != null && out.kcal_objetivo != null) {
+    out.deficit_superavit_kcal = Math.round(out.tdee - out.kcal_objetivo);
+  }
+
+  // 4) Completar ritmo estimado (kg/sem) si hay déficit
+  if (out.ritmo_peso_kg_sem == null && out.deficit_superavit_kcal != null) {
+    // 7700 kcal ~ 1 kg
+    out.ritmo_peso_kg_sem = Number(((out.deficit_superavit_kcal * 7) / 7700) * -1);
+  }
+  return out;
+}
 
 function renderAdviceToHtml(markdown: string): string {
-  // 1) Remove JSON_* lines from visible text
-  const noJson = markdown
+  // 1) Limpieza agresiva: eliminar fences ```...``` (incluye ```json ... ```)
+  const withoutFences = markdown.replace(/```[\s\S]*?```/g, "");
+  // 2) Quitar cualquier línea que contenga JSON_*, aunque no esté al inicio,
+  // títulos o párrafos de hidratación, y recomendaciones directas de agua.
+  const noJson = withoutFences
     .split("\n")
-    .filter((ln) => !/^\s*JSON_(SUMMARY|MEALS|HYDRATION)\s*:/.test(ln))
+    .filter((ln) => !/JSON_(SUMMARY|MEALS|HYDRATION|BEVERAGES)/i.test(ln))
+    .filter((ln) => {
+      const raw = ln.trim();
+      const l = raw.toLowerCase();
+      // Encabezados o líneas de hidratación
+      if (/^#+\s*hidrataci[oó]n/.test(l)) return false;
+      if (/hidrataci[oó]n diaria/.test(l)) return false;
+      // Recomendaciones directas de agua
+      if (/beber\s+agua/.test(l)) return false;
+      if (/bebe\s+agua/.test(l)) return false;
+      if (/toma(r)?\s+agua/.test(l)) return false;
+      if (/^\s*agua[:\-]/.test(l)) return false;
+      // Línea que solo sea la palabra agua
+      if (/^agua\.?$/i.test(raw)) return false;
+      // Listados de bebidas con ml: eliminar (té, infusiones, gaseosa, mate, café) y cualquier línea con ml de agua
+      if (/\b\d{2,4}\s*ml\b/i.test(l)) {
+        if (/(agua|te\s|t[eé]\s|t[eé]\b|t[eé]\s|té|infusi[oó]n|cafe|caf[eé]|gaseosa|cola|mate)/i.test(l)) return false;
+      }
+      return true;
+    })
     .join("\n");
 
   // 2) Escape basic HTML
@@ -89,10 +199,27 @@ function renderAdviceToHtml(markdown: string): string {
 
 // Convierte el markdown del consejo a texto plano legible para PDF (sin asteriscos/markup)
 function renderAdviceToPlain(markdown: string): string {
-  // 1) Eliminar líneas JSON_*
-  const noJson = markdown
+  // 1) Eliminar fences ```...``` completos
+  const withoutFences = markdown.replace(/```[\s\S]*?```/g, "");
+  // 2) Eliminar cualquier línea que contenga JSON_* y referencias directas a hidratación/agua.
+  const noJson = withoutFences
     .split("\n")
-    .filter((ln) => !/^\s*JSON_(SUMMARY|MEALS|HYDRATION)\s*:/.test(ln))
+    .filter((ln) => !/JSON_(SUMMARY|MEALS|HYDRATION|BEVERAGES)/i.test(ln))
+    .filter((ln) => {
+      const raw = ln.trim();
+      const l = raw.toLowerCase();
+      if (/^#+\s*hidrataci[oó]n/.test(l)) return false;
+      if (/hidrataci[oó]n diaria/.test(l)) return false;
+      if (/beber\s+agua/.test(l)) return false;
+      if (/bebe\s+agua/.test(l)) return false;
+      if (/toma(r)?\s+agua/.test(l)) return false;
+      if (/^\s*agua[:\-]/.test(l)) return false;
+      if (/^agua\.?$/i.test(raw)) return false;
+      if (/\b\d{2,4}\s*ml\b/i.test(l)) {
+        if (/(agua|te\s|t[eé]\s|té|infusi[oó]n|cafe|caf[eé]|gaseosa|cola|mate)/i.test(l)) return false;
+      }
+      return true;
+    })
     .join("\n");
   const lines = noJson.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
@@ -151,16 +278,48 @@ export default function OnboardingAdvicePage() {
   const [summary, setSummary] = useState<any | null>(null);
   const [mealItems, setMealItems] = useState<any[] | null>(null);
   const [hydrationLiters, setHydrationLiters] = useState<number | null>(null);
+  // rawBeverages: respuesta directa de la IA (sin procesar)
+  const [rawBeverages, setRawBeverages] = useState<any[] | null>(null);
+  // beverages: bebidas finales procesadas (deduplicadas + distribución de "General")
+  const [beverages, setBeverages] = useState<any[] | null>(null); // {nombre, ml, momento}
   const [savingMeals, setSavingMeals] = useState(false); // (preview only now; no persist until completion elsewhere)
   const [profile, setProfile] = useState<any | null>(null);
   const [weekly, setWeekly] = useState<any | null>(null);
   const [loadingWeekly, setLoadingWeekly] = useState<boolean>(true);
+  // Summary normalizado para uso consistente (PDF, vista semanal, persistencia)
+  const normSummary = useMemo(() => normalizeSummary(summary, profile), [summary, profile]);
   const [proposals, setProposals] = useState<any[] | null>(null);
   const [schedule, setSchedule] = useState<Record<string, string> | null>(null);
   const [showBaseProposals, setShowBaseProposals] = useState<boolean>(false);
   const [showFullAdvice, setShowFullAdvice] = useState<boolean>(false);
   // Variantes propuestas por la IA por tipo: { Desayuno: [...], Almuerzo: [...], ... }
   const [mealVariants, setMealVariants] = useState<Record<string, any[]> | null>(null);
+  // Progreso sintético y ETA mientras se genera el consejo (sin streaming real todavía)
+  const [progress, setProgress] = useState<number>(0); // 0..100
+  const [etaSec, setEtaSec] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const startRef = useRef<number | null>(null);
+  const expectedRef = useRef<number>(20000); // ms estimados
+  const intervalRef = useRef<any>(null);
+  // Modo estricto activado en onboarding para evitar fallbacks
+  const strictMode = true;
+  // Construir URL del endpoint con flags + propagación de params de la página
+  function buildAdviceUrl() {
+    try {
+      const url = new URL(typeof window !== 'undefined' ? window.location.href : 'http://localhost');
+      const base = new URL('/api/account/advice', url.origin);
+      // Propagar params existentes útiles
+      const params = new URLSearchParams(url.search);
+      // Opción A: no forzar long/ensureFull y desactivar strict para usar el modelo flash
+      params.set('strict', '0');
+      params.delete('forceLong');
+      params.delete('ensureFull');
+      base.search = params.toString();
+      return base.pathname + (base.search ? base.search : '');
+    } catch {
+      return '/api/account/advice';
+    }
+  }
   // Construir vista previa efímera a partir de mealItems (AI) si no hay weekly.weekly o para reemplazar cualquier plan previo guardado.
   const ephemeralWeekly = useMemo(() => {
     // Construye un plan semanal rotado SOLO en memoria partiendo de mealItems (AI).
@@ -218,6 +377,49 @@ export default function OnboardingAdvicePage() {
         }
         if (!mealsByType[tipo]) mealsByType[tipo] = [];
         mealsByType[tipo].push(m);
+      }
+    }
+
+    // Normalización: asegurar que los tipos requeridos por enabledMeals existan como buckets
+    const requiredTypes: string[] = [];
+    if (enabledMeals?.desayuno) requiredTypes.push('Desayuno');
+    if (enabledMeals?.almuerzo) requiredTypes.push('Almuerzo');
+    if (enabledMeals?.cena) requiredTypes.push('Cena');
+    const wantsSnackManana = Boolean(enabledMeals?.snack_manana || enabledMeals?.['snack_mañana']);
+    const wantsSnackTarde  = Boolean(enabledMeals?.snack_tarde);
+    if (wantsSnackManana && wantsSnackTarde) {
+      requiredTypes.push('Snack_manana','Snack_tarde');
+    } else if (wantsSnackManana || wantsSnackTarde) {
+      requiredTypes.push('Snack');
+    }
+
+    // Si el usuario quiere dos snacks separados pero solo hay 'Snack' genérico, clonar para crear ambos buckets
+    if (wantsSnackManana && wantsSnackTarde) {
+      const genericSnack = mealsByType['Snack'] || [];
+      if (!mealsByType['Snack_manana'] && (mealsByType['Snack_tarde'] || genericSnack.length)) {
+        mealsByType['Snack_manana'] = (mealsByType['Snack_tarde'] && mealsByType['Snack_tarde'].length)
+          ? JSON.parse(JSON.stringify(mealsByType['Snack_tarde']))
+          : JSON.parse(JSON.stringify(genericSnack));
+      }
+      if (!mealsByType['Snack_tarde'] && (mealsByType['Snack_manana'] || genericSnack.length)) {
+        mealsByType['Snack_tarde'] = (mealsByType['Snack_manana'] && mealsByType['Snack_manana'].length)
+          ? JSON.parse(JSON.stringify(mealsByType['Snack_manana']))
+          : JSON.parse(JSON.stringify(genericSnack));
+      }
+    }
+
+    // Asegurar que todos los requiredTypes existan; si falta alguno, clonar del más parecido
+    for (const t of requiredTypes) {
+      if (!mealsByType[t] || !mealsByType[t].length) {
+        if (/Snack/.test(t)) {
+          const src = mealsByType['Snack'] || mealsByType['Snack_manana'] || mealsByType['Snack_tarde'] || [];
+          if (src.length) mealsByType[t] = JSON.parse(JSON.stringify(src));
+        } else {
+          // Para comidas principales, clonar de otro principal si existe
+          const src = mealsByType['Almuerzo'] || mealsByType['Cena'] || mealsByType['Desayuno'] || [];
+          if (src.length) mealsByType[t] = JSON.parse(JSON.stringify(src));
+        }
+        if (!mealsByType[t]) mealsByType[t] = [];
       }
     }
     // Determinar días activos según dias_dieta del perfil (1..7). Si no hay valor válido, usar los 7.
@@ -378,13 +580,21 @@ export default function OnboardingAdvicePage() {
       ensureVariants(arr, requiredVariants);
     });
 
-    const dailyProtein = (summary && typeof summary === 'object' && typeof summary.proteinas_g === 'number') ? Math.round(summary.proteinas_g) : null;
-  const typeKeys = Object.keys(mealsByType);
-    const proteinShare = typeKeys.length ? (1 / typeKeys.length) : 0;
+    const dailyProtein = (normSummary && typeof normSummary === 'object' && typeof normSummary.proteinas_g === 'number') ? Math.round(normSummary.proteinas_g) : null;
+    const typeKeys = Object.keys(mealsByType);
+    // Orden sugerido por horario si existe; si no, orden lógico
+    const baseOrder = ['Desayuno','Snack_manana','Snack','Almuerzo','Snack_tarde','Cena'];
+    const scheduleOrder = schedule ? (Object.keys(schedule) as string[]) : baseOrder;
+    const typeKeysSorted = typeKeys.slice().sort((a,b) => {
+      const ia = scheduleOrder.indexOf(a) === -1 ? 999 : scheduleOrder.indexOf(a);
+      const ib = scheduleOrder.indexOf(b) === -1 ? 999 : scheduleOrder.indexOf(b);
+      return ia - ib;
+    });
+    const proteinShare = typeKeysSorted.length ? (1 / typeKeysSorted.length) : 0;
 
     return dayNames.map(day => {
       const rot = rotationIndex[day] ?? 0;
-      const mealsForDay = typeKeys.map(tipo => {
+      const mealsForDay = typeKeysSorted.map(tipo => {
         const variants = mealsByType[tipo];
         const variant = variants[rot % variants.length];
         const nombre = variant?.nombre || variant?.titulo || `${tipo} base`;
@@ -406,38 +616,110 @@ export default function OnboardingAdvicePage() {
       });
       return { day, active: true, meals: mealsForDay };
     });
-  }, [mealItems, summary, profile, mealVariants]);
+  }, [mealItems, normSummary, profile, mealVariants]);
 
+  // Lanzar fetch inicial del consejo con progreso sintético
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+
+    // Inicializar progreso y loading inmediatamente al montar (antes de cualquier fetch)
+    setError(null);
+    setLoading(true);
+    setLoadingWeekly(true);
+    startRef.current = performance.now();
+    const base = 14000;
+    const extra = Math.random() * 12000; // 0-12s
+    expectedRef.current = base + extra;
+    setProgress(3);
+    setEtaSec(Math.round(expectedRef.current / 1000));
+
+    async function loadProfileAndSchedule() {
+      // Restaurar preferencia Ver más/Ver menos
       try {
-        // Restaurar preferencia Ver más/Ver menos
-        try {
-          const v = localStorage.getItem("advice_show_full");
-          if (v === "1") setShowFullAdvice(true);
-        } catch {}
-        // Cargar perfil para mostrar resumen de selección (días, proteína, comidas habilitadas)
-        try {
-          const prof = await fetch("/api/account/profile", { cache: "no-store" });
-          if (prof.ok) {
-            const pj = await prof.json();
+        const v = localStorage.getItem("advice_show_full");
+        if (v === "1") setShowFullAdvice(true);
+      } catch {}
+      // Perfil
+      try {
+        const prof = await fetch("/api/account/profile", { cache: "no-store" });
+        if (prof.ok) {
+          const pj = await prof.json();
             if (!cancelled) setProfile(pj?.user || null);
-          }
-        } catch {}
+        }
+      } catch {}
+      // Horarios
+      try {
+        const sRes = await fetch("/api/account/meal-plan/schedule", { cache: "no-store" });
+        if (sRes.ok) {
+          const sj = await sRes.json().catch(() => ({}));
+          const sched = sj?.schedule && typeof sj.schedule === "object" ? sj.schedule : null;
+          if (!cancelled) setSchedule(sched);
+        }
+      } catch {}
+    }
 
-        // Cargar horarios de comidas (si existen)
-        try {
-          const sRes = await fetch("/api/account/meal-plan/schedule", { cache: "no-store" });
-          if (sRes.ok) {
-            const sj = await sRes.json().catch(() => ({}));
-            const sched = sj?.schedule && typeof sj.schedule === "object" ? sj.schedule : null;
-            if (!cancelled) setSchedule(sched);
-          }
-        } catch {}
-
-        const res = await fetch("/api/account/advice", { method: "POST" });
-        const json = await res.json();
+    async function fetchAdvice() {
+      setError(null);
+      try {
+        const res = await fetch(buildAdviceUrl(), { method: "POST" });
+        const json = await res.json().catch(() => ({}));
+        if (res.status === 422) {
+          // Modo estricto: salida incompleta -> mostrar error claro
+          setError(json?.error || 'La IA no devolvió todos los bloques requeridos. Intenta nuevamente.');
+          setLoading(false);
+          setProgress(100);
+          setEtaSec(0);
+          return;
+        }
+        // Caso: generación todavía en curso (202 started/pending desde prefetch)
+        if (res.status === 202 && (json?.started || json?.pending)) {
+          // Polling hasta 60s
+            const pollStart = performance.now();
+            async function poll() {
+              if (cancelled) return;
+              try {
+                const r2 = await fetch(buildAdviceUrl(), { method: "POST" });
+                const j2 = await r2.json().catch(() => ({}));
+                if (r2.ok && !j2.started && !j2.pending) {
+                  // completado
+                  if (!cancelled) {
+                    if (strictMode && j2.fallback) {
+                      setError('El modelo devolvió fallback y el modo estricto está activado. Intenta nuevamente.');
+                      setLoading(false);
+                      setProgress(100);
+                      setEtaSec(0);
+                      return;
+                    }
+                    setText(j2.advice || "");
+                    setSummary(j2.summary ?? null);
+                    const items = j2.meals?.items;
+                    setMealItems(Array.isArray(items) && items.length ? items : null);
+                    const variants = j2.meals?.variants;
+                    setMealVariants(variants && typeof variants === 'object' ? variants : null);
+                    const litros = j2.hydration?.litros;
+                    setHydrationLiters(typeof litros === "number" && litros > 0 ? litros : null);
+                    const bevs = j2.beverages?.items;
+                    setRawBeverages(Array.isArray(bevs) && bevs.length ? bevs : null);
+                    setLoading(false);
+                    setProgress(100);
+                    setEtaSec(0);
+                  }
+                  return;
+                }
+                if (performance.now() - pollStart > 60000) {
+                  if (!cancelled) {
+                    setError('La generación está tardando demasiado. Puedes reintentar.');
+                    setLoading(false);
+                    setEtaSec(0);
+                  }
+                  return;
+                }
+              } catch {}
+              if (!cancelled) setTimeout(poll, 2000);
+            }
+            poll();
+            return; // salimos para que el flujo normal no se ejecute aún
+        }
         if (!res.ok) {
           if (res.status === 401) {
             if (!cancelled) router.replace("/auth/login");
@@ -451,7 +733,14 @@ export default function OnboardingAdvicePage() {
           throw new Error(json?.error || "AI error");
         }
         if (!cancelled) {
-          setText(json.advice);
+          if (strictMode && json.fallback) {
+            setError('El modelo devolvió fallback y el modo estricto está activado. Intenta nuevamente.');
+            setLoading(false);
+            setProgress(100);
+            setEtaSec(0);
+            return;
+          }
+          setText(json.advice || "");
           setSummary(json.summary ?? null);
           const items = json.meals?.items;
           setMealItems(Array.isArray(items) && items.length ? items : null);
@@ -459,17 +748,228 @@ export default function OnboardingAdvicePage() {
           setMealVariants(variants && typeof variants === 'object' ? variants : null);
           const litros = json.hydration?.litros;
           setHydrationLiters(typeof litros === "number" && litros > 0 ? litros : null);
+          const bevs = json.beverages?.items;
+          setRawBeverages(Array.isArray(bevs) && bevs.length ? bevs : null);
+          if (json.cached) {
+            // Ajustar progreso instantáneo para cache
+            setProgress(100);
+            setEtaSec(0);
+          } else if (typeof json.took_ms === 'number') {
+            try { localStorage.setItem('advice_last_ms', String(json.took_ms)); } catch {}
+          }
         }
-      } catch (e) {
-        if (!cancelled) setText("No se pudo generar el consejo en este momento.");
+      } catch (e:any) {
+        if (!cancelled) {
+          setError(e?.message || 'No se pudo generar el consejo');
+          setText("No se pudo generar el consejo en este momento.");
+        }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          // completar progreso a 100 de forma suave
+          setProgress(p => p < 100 ? 100 : p);
+          setEtaSec(0);
+        }
+      }
+    }
+
+    // Ejecutar en paralelo: no esperes a perfil/schedule para comenzar IA
+    Promise.allSettled([loadProfileAndSchedule(), fetchAdvice()]);
+
+    return () => { cancelled = true; };
+  }, []);
+
+  // Intervalo de actualización del progreso sintético
+  useEffect(() => {
+    if (loading) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(() => {
+        if (!startRef.current) return;
+        const now = performance.now();
+        const elapsed = now - startRef.current;
+        const expected = expectedRef.current || 20000;
+        // Curva por tramos: 0-3s -> hasta 40%; 3-8s -> 40-70%; 8s- (expected*0.9) -> 70-93%; resto se frena en 96%.
+        let target = 0;
+        if (elapsed < 3000) {
+          target = (elapsed / 3000) * 40;
+        } else if (elapsed < 8000) {
+          target = 40 + ((elapsed - 3000) / 5000) * 30; // 40-70
+        } else if (elapsed < expected * 0.9) {
+          const span = expected * 0.9 - 8000;
+          target = 70 + ((elapsed - 8000) / span) * 23; // 70-93
+        } else {
+          target = 96; // se detiene aquí hasta completar
+        }
+        setProgress(p => {
+          const next = Math.min(loading ? target : 100, 100);
+            return next > p ? next : p; // monotónico
+        });
+        const remainingMs = Math.max(0, expected - elapsed);
+        setEtaSec(remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0);
+      }, 500);
+      return () => { clearInterval(intervalRef.current); };
+    } else {
+      // Loading terminó -> limpiar
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      // Ocultar barra después de breve delay (mantener 100% por feedback)
+      const timeout = setTimeout(() => {
+        setEtaSec(null);
+      }, 1500);
+      return () => clearTimeout(timeout);
+    }
+  }, [loading]);
+
+  function retryAdvice() {
+    // Reinicia la lógica de fetch usando el mismo efecto anterior: simplemente replicamos fetchAdvice
+    setError(null);
+    setText("");
+    setMealItems(null);
+    setMealVariants(null);
+    setHydrationLiters(null);
+    setRawBeverages(null);
+    // re-disparar usando lógica separada: reusar código -> simple fetch inline
+    (async () => {
+      setLoading(true);
+      startRef.current = performance.now();
+      expectedRef.current = 14000 + Math.random() * 12000;
+      setProgress(3);
+      setEtaSec(Math.round(expectedRef.current / 1000));
+      try {
+        const res = await fetch(buildAdviceUrl(), { method: "POST" });
+        const json = await res.json().catch(() => ({}));
+        if (res.status === 422) throw new Error(json?.error || 'Salida incompleta (modo estricto)');
+        if (!res.ok) throw new Error(json?.error || 'AI error');
+        if (strictMode && json.fallback) throw new Error('El modelo devolvió fallback (modo estricto)');
+        setText(json.advice || "");
+        setSummary(json.summary ?? null);
+        const items = json.meals?.items;
+        setMealItems(Array.isArray(items) && items.length ? items : null);
+        const variants = json.meals?.variants;
+        setMealVariants(variants && typeof variants === 'object' ? variants : null);
+        const litros = json.hydration?.litros;
+        setHydrationLiters(typeof litros === "number" && litros > 0 ? litros : null);
+        const bevs = json.beverages?.items;
+        setRawBeverages(Array.isArray(bevs) && bevs.length ? bevs : null);
+      } catch(e:any) {
+        setError(e?.message || 'No se pudo generar el consejo');
+        setText("No se pudo generar el consejo en este momento.");
+      } finally {
+        setLoading(false);
+        setProgress(100);
+        setEtaSec(0);
       }
     })();
-    return () => {
-      cancelled = true;
+  }
+
+  // Procesamiento de bebidas: deduplicar (mismo nombre + momento) sumando ml y limitando a 250; distribuir las de momento "General".
+  useEffect(() => {
+    if (!rawBeverages || !Array.isArray(rawBeverages) || rawBeverages.length === 0) {
+      setBeverages(null);
+      return;
+    }
+
+    // Normalizar claves (sin tildes, minúsculas, trim)
+    const norm = (s: string) => s
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .toLowerCase()
+      .trim();
+
+    // Detectar comidas habilitadas para ordenar momentos
+    let enabledMeals: any = null;
+    try {
+      const rawPref = profile?.preferencias_alimentos;
+      const pref = rawPref ? (typeof rawPref === 'string' ? JSON.parse(rawPref) : rawPref) : null;
+      enabledMeals = pref?.enabledMeals || null;
+    } catch {}
+    const snackManana = enabledMeals?.snack_manana || enabledMeals?.["snack_mañana"] || false;
+    const snackTarde = enabledMeals?.snack_tarde || false;
+
+    // Orden base de momentos
+    const baseOrder: string[] = ['Desayuno'];
+    if (snackManana) baseOrder.push('Snack mañana');
+    baseOrder.push('Almuerzo');
+    if (snackTarde) baseOrder.push('Snack tarde');
+    baseOrder.push('Cena');
+
+    // Si hay schedule, usar sus claves para priorizar el orden real horario
+    let scheduleOrder: string[] = [];
+    if (schedule && typeof schedule === 'object') {
+      scheduleOrder = Object.keys(schedule)
+        .filter(k => typeof schedule[k] === 'string')
+        .sort((a,b) => {
+          const ta = (schedule as any)[a];
+          const tb = (schedule as any)[b];
+          return String(ta).localeCompare(String(tb));
+        });
+    }
+    const momentOrder = scheduleOrder.length ? scheduleOrder : baseOrder;
+
+    // 1) Clonar y normalizar entradas iniciales
+    const cloned = rawBeverages.map(b => ({
+        nombre: (b?.nombre || b?.name || 'Bebida').toString().trim(),
+        ml: Math.min(250, Math.max(0, Number(b?.ml) || 0)),
+        momento: (b?.momento || b?.moment || '').toString().trim()
+      }))
+      // Filtrar agua directa (no mostrarla ni contabilizarla)
+      .filter(b => b.ml > 0 && !/^agua(\b|\s|$)/i.test(b.nombre));
+
+    // 2) Separar las generales
+    const general: any[] = [];
+    const withMoment: any[] = [];
+    cloned.forEach(b => {
+      if (!b.momento || /^general$/i.test(b.momento)) general.push(b); else withMoment.push(b);
+    });
+
+    // 3) Distribuir bebidas "General" cíclicamente entre los momentos conocidos
+    if (general.length && momentOrder.length) {
+      general.forEach((b, idx) => {
+        b.momento = momentOrder[idx % momentOrder.length];
+      });
+    }
+
+    // 4) Unir listas
+    const all = [...withMoment, ...general];
+
+    // 5) Deduplicar (nombre + momento) sumando ml y limitando a 250 ml totales
+    const map = new Map<string, { nombre: string; momento: string; ml: number }>();
+    for (const b of all) {
+      const key = norm(b.nombre) + '|' + norm(b.momento || 'General');
+      const prev = map.get(key);
+      if (prev) {
+        prev.ml = Math.min(250, prev.ml + b.ml);
+      } else {
+        map.set(key, { nombre: b.nombre, momento: b.momento || 'General', ml: Math.min(250, b.ml) });
+      }
+    }
+
+    // 6) Ordenar por orden de momentos y luego por nombre
+    const orderIndex = (m: string) => {
+      const i = momentOrder.findIndex(o => o.toLowerCase() === m.toLowerCase());
+      return i === -1 ? 999 : i;
     };
-  }, []);
+    let finalList = Array.from(map.values()).sort((a,b) => {
+      const om = orderIndex(a.momento) - orderIndex(b.momento);
+      if (om !== 0) return om;
+      return a.nombre.localeCompare(b.nombre, 'es');
+    });
+
+    // Limitar a máximo 2 bebidas totales (2 tipos/momentos) según nueva regla
+    if (finalList.length > 2) {
+      const picked = [];
+      const momentsSeen = new Set();
+      for (const b of finalList) {
+        const mKey = b.momento.toLowerCase();
+        if (momentsSeen.has(mKey)) continue;
+        picked.push(b);
+        momentsSeen.add(mKey);
+        if (picked.length === 2) break;
+      }
+      finalList = picked;
+    }
+
+    setBeverages(finalList.length ? finalList : null);
+  }, [rawBeverages, schedule, profile]);
 
   // Persistir preferencia de ver más/menos
   useEffect(() => {
@@ -478,32 +978,87 @@ export default function OnboardingAdvicePage() {
 
   // (sin persistencia de ver más/menos; el consejo se muestra completo)
 
-  // Generar plan semanal con lo ya seleccionado (dias_dieta, enabledMeals, proteína)
+  // Generar plan semanal desde las comidas generadas por IA
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoadingWeekly(true);
-        const res = await fetch("/api/account/meal-plan/weekly-proposals", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          // No enviamos daysSelected para que use usuario.dias_dieta
-          body: JSON.stringify({}),
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(j?.error || "No se pudo generar el plan semanal");
-        if (!cancelled) {
-          setWeekly(j);
-          setProposals(Array.isArray(j?.proposals) ? j.proposals : null);
-        }
-      } catch (e) {
-        console.warn("weekly-proposals error", e);
-      } finally {
-        if (!cancelled) setLoadingWeekly(false);
+    if (!mealItems || !Array.isArray(mealItems) || mealItems.length === 0) {
+      setWeekly(null);
+      setLoadingWeekly(false);
+      return;
+    }
+
+    // Crear plan semanal variado basado en las comidas generadas por IA
+    const createWeeklyPlan = () => {
+      const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+      const enabledMeals = profile?.preferencias_alimentos?.enabledMeals;
+      const mealTypes: string[] = [];
+
+      if (enabledMeals?.desayuno) mealTypes.push('Desayuno');
+      if (enabledMeals?.almuerzo) mealTypes.push('Almuerzo');
+      if (enabledMeals?.cena) mealTypes.push('Cena');
+      if (enabledMeals?.snack_manana || enabledMeals?.snack_mañana) mealTypes.push('Snack_manana');
+      if (enabledMeals?.snack_tarde) mealTypes.push('Snack_tarde');
+
+      if (mealTypes.length === 0) {
+        mealTypes.push('Desayuno', 'Almuerzo', 'Cena', 'Snack');
       }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+
+      // Organizar comidas por tipo
+      const mealsByType: Record<string, any[]> = {};
+      mealItems.forEach(meal => {
+        const tipo = meal.tipo || 'Snack';
+        if (!mealsByType[tipo]) mealsByType[tipo] = [];
+        mealsByType[tipo].push(meal);
+      });
+
+      // Crear rotación semanal para cada tipo de comida
+      const weekly = days.map((day, dayIndex) => {
+        const meals = mealTypes.map((tipo, typeIndex) => {
+          const availableMeals = mealsByType[tipo] || [];
+          if (availableMeals.length === 0) {
+            return {
+              tipo,
+              receta: { nombre: `${tipo} básico` },
+              targetProteinG: summary?.proteinas_g ? Math.round(summary.proteinas_g / mealTypes.length) : null,
+              itemsText: [`Comida ${tipo.toLowerCase()} no disponible`]
+            };
+          }
+
+          // Rotar comidas para variar entre días
+          const mealIndex = (dayIndex + typeIndex) % availableMeals.length;
+          const selectedMeal = availableMeals[mealIndex];
+
+          return {
+            tipo,
+            receta: { nombre: selectedMeal.nombre || `${tipo} personalizado` },
+            targetProteinG: summary?.proteinas_g ? Math.round(summary.proteinas_g / mealTypes.length) : null,
+            itemsText: selectedMeal.ingredientes?.map((ing: any) => {
+              const nombre = ing.nombre || ing.name || 'Ingrediente';
+              const gramos = ing.gramos || ing.g || 0;
+              if (gramos > 0) {
+                return `${nombre} (${gramos} g)`;
+              }
+              return nombre;
+            }) || []
+          };
+        });
+
+        return {
+          day,
+          active: true,
+          objectiveLabel: profile?.objetivo === 'Bajar_grasa' ? 'Bajar de peso' :
+                         profile?.objetivo === 'Ganar_musculo' ? 'Subir masa muscular' :
+                         profile?.objetivo ? 'Mantener peso' : 'Objetivo',
+          proteinDailyTarget: summary?.proteinas_g || null,
+          meals
+        };
+      });
+
+      return weekly;
+    };
+
+    setWeekly({ weekly: createWeeklyPlan() });
+    setLoadingWeekly(false);
+  }, [mealItems, summary, profile]);
 
   // Eliminado guardado inmediato del plan inicial. El plan semanal aquí es solo una vista previa.
   // Se evita llamar a /api/account/onboarding/initial-plan hasta finalizar onboarding para que
@@ -534,6 +1089,11 @@ export default function OnboardingAdvicePage() {
 
   async function next() {
     try {
+      // Bloquear si no hay plan generado aún
+      if (!ephemeralWeekly && !(weekly?.weekly && Array.isArray(weekly.weekly) && weekly.weekly.length)) {
+        toast.error("Primero genera el plan semanal (espera a que termine la IA)");
+        return;
+      }
       // Guardar plan inicial SOLO ahora (al finalizar) usando las comidas generadas por la IA (mealItems)
       if (Array.isArray(mealItems) && mealItems.length) {
         try {
@@ -570,12 +1130,63 @@ export default function OnboardingAdvicePage() {
         }
       }
 
+      // 2b) Guardar plan de bebidas (cada bebida <=250ml, no confundir con hidratación total)
+      if (Array.isArray(beverages) && beverages.length) {
+        try {
+          const res = await fetch("/api/account/beverages-plan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: beverages.map(b => ({ nombre: b.nombre, ml: b.ml, momento: b.momento })) }),
+            credentials: "include",
+            cache: "no-store",
+          });
+          if (!res.ok) console.warn("No se pudo guardar plan de bebidas", await res.text());
+        } catch (e) {
+          console.warn("Error guardando plan de bebidas", e);
+        }
+      }
+
   // 3) Aplicar objetivos de plan (kcal y macros) y guardar el consejo para el usuario
       try {
         const applyBody: any = {};
-        if (summary && typeof summary === "object") applyBody.summary = summary;
+        if (summary && typeof summary === "object") {
+          // Usar summary normalizado para asegurar campos completos
+          const s: any = normalizeSummary(summary, profile) || { ...summary };
+          // Si aun faltara kcal, intentar una estimación mínima desde TDEE/deficit o macros
+          let kcal = Number(s.kcal_objetivo);
+          const prot = Number(s.proteinas_g) || null;
+          if (!Number.isFinite(kcal)) {
+            const tdee = Number(s.tdee);
+            const def = Number(s.deficit_superavit_kcal);
+            if (Number.isFinite(tdee) && Number.isFinite(def)) kcal = Math.round(tdee - def);
+            if (!Number.isFinite(kcal) && Number.isFinite(Number(s.grasas_g)) && Number.isFinite(Number(s.carbohidratos_g)) && prot != null) {
+              kcal = Math.round(prot * 4 + Number(s.grasas_g) * 9 + Number(s.carbohidratos_g) * 4);
+            }
+            if (Number.isFinite(kcal)) s.kcal_objetivo = kcal;
+          }
+          // Completar grasas/carbos si faltan con kcal
+          if (Number.isFinite(Number(s.kcal_objetivo)) && (!Number.isFinite(Number(s.grasas_g)) || Number(s.grasas_g) <= 0)) {
+            s.grasas_g = Math.max(0, Math.round((Number(s.kcal_objetivo) * 0.25) / 9));
+          }
+          if (Number.isFinite(Number(s.kcal_objetivo)) && prot && (!Number.isFinite(Number(s.carbohidratos_g)) || Number(s.carbohidratos_g) <= 0)) {
+            const carbs = Math.round((Number(s.kcal_objetivo) - (prot * 4) - (Number(s.grasas_g) * 9)) / 4);
+            s.carbohidratos_g = Math.max(0, carbs);
+          }
+          applyBody.summary = s;
+        }
         if (typeof hydrationLiters === "number" && hydrationLiters > 0) applyBody.agua_litros_obj = hydrationLiters;
         if (text) applyBody.advice = text;
+        // Persistir bebidas/infusiones si existen
+        if (Array.isArray(beverages) && beverages.length) {
+          applyBody.beverages = beverages.map(b => ({
+            nombre: (b?.nombre || b?.name || 'Bebida').toString().trim(),
+            ml: Math.min(250, Math.max(0, Number(b?.ml) || 0)),
+            momento: (b?.momento || 'General').toString()
+          }));
+        }
+        // Persistir plan semanal final (usamos la vista previa efímera si existe; si no, el weekly persistido)
+        const finalWeekly = Array.isArray(ephemeralWeekly) ? ephemeralWeekly : (Array.isArray(weekly?.weekly) ? weekly.weekly : null);
+        if (finalWeekly) applyBody.weekly = finalWeekly;
         if (Object.keys(applyBody).length) {
           const applyRes = await fetch("/api/account/plan/apply", {
             method: "POST",
@@ -668,6 +1279,7 @@ export default function OnboardingAdvicePage() {
       // Resumen estructurado (si existe)
       let cursorY = margin + 40;
       if (summary) {
+        const s: any = normSummary || summary;
         doc.setTextColor(0);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(12);
@@ -675,14 +1287,16 @@ export default function OnboardingAdvicePage() {
         cursorY += 18;
         doc.setFont("helvetica", "normal");
         const rows: Array<[string, string]> = [
-          ["TMB", summary.tmb != null ? `${Math.round(summary.tmb)} kcal` : "—"],
-          ["TDEE", summary.tdee != null ? `${Math.round(summary.tdee)} kcal` : "—"],
-          ["Kcal objetivo", summary.kcal_objetivo != null ? `${Math.round(summary.kcal_objetivo)} kcal` : "—"],
-          ["Déficit/Superávit", summary.deficit_superavit_kcal != null ? `${Math.round(summary.deficit_superavit_kcal)} kcal/día` : "—"],
-          ["Ritmo estimado", summary.ritmo_peso_kg_sem != null ? `${summary.ritmo_peso_kg_sem.toFixed(2)} kg/sem` : "—"],
-          ["Proteínas", summary.proteinas_g != null ? `${Math.round(summary.proteinas_g)} g` : "—"],
-          ["Grasas", summary.grasas_g != null ? `${Math.round(summary.grasas_g)} g` : "—"],
-          ["Carbohidratos", summary.carbohidratos_g != null ? `${Math.round(summary.carbohidratos_g)} g` : "—"],
+          ["TMB", s?.tmb != null ? `${Math.round(s.tmb)} kcal` : "—"],
+          ["TDEE", s?.tdee != null ? `${Math.round(s.tdee)} kcal` : "—"],
+          ["Kcal objetivo", s?.kcal_objetivo != null ? `${Math.round(s.kcal_objetivo)} kcal` : "—"],
+          ["Déficit/Superávit", s?.deficit_superavit_kcal != null ? `${Math.round(s.deficit_superavit_kcal)} kcal/día` : "—"],
+          ["Ritmo estimado", s?.ritmo_peso_kg_sem != null ? `${Number(s.ritmo_peso_kg_sem).toFixed(2)} kg/sem` : "—"],
+          ["Proteínas", s?.proteinas_g != null ? `${Math.round(s.proteinas_g)} g` : "—"],
+          ["Grasas", s?.grasas_g != null ? `${Math.round(s.grasas_g)} g` : "—"],
+          ["Carbohidratos", s?.carbohidratos_g != null ? `${Math.round(s.carbohidratos_g)} g` : "—"],
+          // Objetivo de agua (separado de bebidas) si hydrationLiters está presente
+          ["Agua (objetivo)", (typeof hydrationLiters === 'number' && hydrationLiters > 0) ? `${hydrationLiters.toFixed(2)} L` : "—"],
         ];
         const leftColWidth = 140;
         const lineHeight = 16;
@@ -724,7 +1338,7 @@ export default function OnboardingAdvicePage() {
       doc.line(margin, cursorY, pageWidth - margin, cursorY);
       cursorY += 18;
 
-      // Título de plan semanal
+  // Título de plan semanal
       doc.setFont("helvetica", "bold");
       doc.setFontSize(13);
       doc.text("Plan semanal", margin, cursorY);
@@ -791,6 +1405,8 @@ export default function OnboardingAdvicePage() {
         }
       }
 
+      // Se elimina sección de bebidas del PDF según nueva política (no listar hidratación ni agua)
+
       doc.save("Consejo-FitBalance.pdf");
     } catch (e) {
       toast.error("No se pudo generar el PDF");
@@ -801,11 +1417,37 @@ export default function OnboardingAdvicePage() {
   return (
     <OnboardingLayout>
         <OnboardingHeader title="Consejo personalizado" subtitle="Aquí verás recomendaciones y tu plan semanal sugerido según lo que seleccionaste." />
+        {typeof hydrationLiters === 'number' && hydrationLiters > 0 && (
+          <div className="mb-4 text-xs text-muted-foreground">
+            Agua (objetivo diario): <span className="font-medium text-foreground">{hydrationLiters.toFixed(2)} L</span>
+          </div>
+        )}
 
         {/* Resumen movido a /onboarding/review para evitar redundancia */}
         <OnboardingCard>
           {loading ? (
-            <div className="min-h-[200px]">Generando recomendaciones con IA...</div>
+            <div className="min-h-[200px] flex flex-col gap-3">
+              <div>Generando recomendaciones con IA...</div>
+              <div className="w-full h-3 rounded bg-muted overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all duration-500 ease-out"
+                  style={{ width: `${Math.min(100, progress).toFixed(1)}%` }}
+                />
+              </div>
+              <div className="text-xs text-muted-foreground flex items-center justify-between">
+                <span>{Math.round(progress)}%</span>
+                {etaSec != null && etaSec > 0 && <span>~{etaSec}s restantes</span>}
+                {etaSec === 0 && <span>Procesando…</span>}
+              </div>
+              {error && (
+                <div className="text-xs text-destructive">{error}</div>
+              )}
+              {error && (
+                <div>
+                  <Button variant="outline" size="sm" onClick={retryAdvice}>Reintentar</Button>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               <div className={`${showFullAdvice ? '' : 'max-h-[360px] overflow-hidden relative'}`}>
@@ -817,11 +1459,11 @@ export default function OnboardingAdvicePage() {
                   <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-background to-transparent" />
                 )}
               </div>
-              <div className="mt-2 flex gap-2 justify-end">
+              <div className="mt-2 flex gap-1 justify-end">
                 <Button
                   type="button"
-                  variant="outline"
-                  size="sm"
+                  variant="ghost"
+                  size="icon"
                   onClick={() => {
                     try {
                       const plain = renderAdviceToPlain(text || "");
@@ -831,8 +1473,22 @@ export default function OnboardingAdvicePage() {
                       toast.error("No se pudo copiar");
                     }
                   }}
+                  aria-label="Copiar consejo"
+                  title="Copiar consejo"
                 >
-                  Copiar consejo
+                  <Clipboard className="w-4 h-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    downloadPdf().catch(() => toast.error("No se pudo descargar el PDF"));
+                  }}
+                  aria-label="Descargar PDF"
+                  title="Descargar PDF"
+                >
+                  <Download className="w-4 h-4" />
                 </Button>
                 <Button type="button" variant="ghost" size="sm" onClick={() => setShowFullAdvice(v => !v)}>
                   {showFullAdvice ? 'Ver menos' : 'Ver más'}
@@ -847,21 +1503,31 @@ export default function OnboardingAdvicePage() {
           <div className="font-medium">Plan semanal sugerido (vista previa)</div>
           <div className="text-xs text-muted-foreground">No se guarda todavía; si retrocedes no se persistirá ningún cambio. (Generado en memoria)</div>
           {loading && !ephemeralWeekly ? (
-            <div className="text-sm text-muted-foreground mt-2">Generando plan semanal…</div>
+            <div className="w-full mt-3">
+              <div className="text-sm mb-2 text-muted-foreground flex items-center justify-between">
+                <span>Generando plan semanal…</span>
+                {progress < 100 && <span className="text-[10px]">{Math.round(Math.min(progress, 96))}%</span>}
+              </div>
+              <div className="h-2 w-full rounded bg-muted overflow-hidden">
+                <div className="h-full bg-primary transition-all duration-500" style={{ width: `${Math.min(progress, 96).toFixed(1)}%` }} />
+              </div>
+            </div>
           ) : ephemeralWeekly ? (
             <div className="mt-3">
-              <WeeklyPlanByDay weekly={ephemeralWeekly} schedule={schedule} />
+              <WeeklyPlanByDay weekly={ephemeralWeekly} schedule={schedule} beverages={beverages} />
             </div>
           ) : loadingWeekly ? (
             <div className="text-sm text-muted-foreground mt-2">Generando plan semanal…</div>
           ) : weekly?.weekly ? (
             <div className="mt-3">
-              <WeeklyPlanByDay weekly={weekly.weekly} schedule={schedule} />
+              <WeeklyPlanByDay weekly={weekly.weekly} schedule={schedule} beverages={beverages} />
             </div>
           ) : (
             <div className="text-sm text-muted-foreground mt-2">No hay plan semanal para mostrar.</div>
           )}
         </OnboardingCard>
+
+        {/* Tarjeta de plan de bebidas eliminada según solicitud. */}
 
         {/* Propuestas base (3) para rotación */}
         {/* Propuestas base removidas por simplicidad */}
@@ -870,7 +1536,7 @@ export default function OnboardingAdvicePage() {
             Solo al presionar "Guardar y terminar" se aplican objetivos, se guarda el consejo y se completa el onboarding. */}
         <OnboardingActions
           back={{ onClick: () => router.push("/onboarding/review"), label: "Volver" }}
-          next={{ onClick: next, label: "Guardar y terminar", disabled: loading }}
+          next={{ onClick: next, label: "Guardar y terminar", disabled: loading || (!ephemeralWeekly && !(weekly?.weekly && Array.isArray(weekly.weekly) && weekly.weekly.length)) }}
         />
     </OnboardingLayout>
   );

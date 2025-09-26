@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
 export default function RegisterPage() {
@@ -159,11 +160,12 @@ export default function RegisterPage() {
           {errors.confirmPassword && <p className="text-sm text-red-600">{errors.confirmPassword}</p>}
         </div>
 
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
+        <label htmlFor="remember" className="flex items-center gap-2 text-sm select-none cursor-pointer">
+          <Checkbox
+            id="remember"
             checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
+            onCheckedChange={(v) => setRemember(Boolean(v))}
+            className="data-[state=checked]:bg-black data-[state=checked]:border-black"
           />
           Recordarme
         </label>

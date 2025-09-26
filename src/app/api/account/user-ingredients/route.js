@@ -56,15 +56,27 @@ export async function POST(request) {
     const arr = Array.isArray(body.items) ? body.items : [];
     const mode = String(body.mode || "replace"); // 'replace' | 'append'
 
+    // Utilidades categoria -> enum
+    function toEnumCategory(cat) {
+      const s = (cat || "").toString().toLowerCase();
+      if (/^prote/i.test(s)) return 'Proteinas';
+      if (/^carbo/i.test(s)) return 'Carbohidratos';
+      if (/^fibr/i.test(s)) return 'Fibras';
+      if (/^snack/i.test(s)) return 'Snacks';
+      if (/^gras/i.test(s)) return 'Grasos';
+      if (/bebida|infusi/.test(s)) return 'BebidasInfusiones';
+      return null;
+    }
+
     // Normalizar entradas: pueden venir como {alimentoId} o {nombre, categoria?, prioridad?}
     const withIds = [];
     const byName = [];
     for (const x of arr) {
       if (x && (x.alimentoId || x.alimento_id)) {
         const id = Number(x.alimentoId ?? x.alimento_id);
-        if (Number.isFinite(id) && id > 0) withIds.push({ alimentoId: id, categoria: x.categoria ?? null, prioridad: x.prioridad != null ? Number(x.prioridad) : null });
+        if (Number.isFinite(id) && id > 0) withIds.push({ alimentoId: id, categoria: x.categoria ?? null, categoria_enum: toEnumCategory(x.categoria) ?? null, prioridad: x.prioridad != null ? Number(x.prioridad) : null });
       } else if (x && typeof x.nombre === "string" && x.nombre.trim()) {
-        byName.push({ nombre: x.nombre.trim(), categoria: x.categoria ?? null, prioridad: x.prioridad != null ? Number(x.prioridad) : null });
+        byName.push({ nombre: x.nombre.trim(), categoria: x.categoria ?? null, categoria_enum: toEnumCategory(x.categoria) ?? null, prioridad: x.prioridad != null ? Number(x.prioridad) : null });
       }
     }
 
@@ -79,14 +91,17 @@ export async function POST(request) {
       let alimId;
       if (existing) {
         alimId = existing.id;
-        if (!existing.categoria && item.categoria) {
-          await prisma.alimento.update({ where: { id: existing.id }, data: { categoria: item.categoria } });
+        const updateData = {};
+        if (!existing.categoria && item.categoria) updateData.categoria = item.categoria;
+        if (!existing.categoria_enum && item.categoria_enum) updateData.categoria_enum = item.categoria_enum;
+        if (Object.keys(updateData).length) {
+          await prisma.alimento.update({ where: { id: existing.id }, data: updateData });
         }
       } else {
-        const created = await prisma.alimento.create({ data: { nombre: item.nombre, categoria: item.categoria ?? null } });
+        const created = await prisma.alimento.create({ data: { nombre: item.nombre, categoria: item.categoria ?? null, categoria_enum: item.categoria_enum ?? null } });
         alimId = created.id;
       }
-      withIds.push({ alimentoId: alimId, categoria: item.categoria ?? null, prioridad: item.prioridad ?? null });
+      withIds.push({ alimentoId: alimId, categoria: item.categoria ?? null, categoria_enum: item.categoria_enum ?? null, prioridad: item.prioridad ?? null });
     }
 
     // Validar que los alimentoId existan para evitar errores de FK
@@ -122,8 +137,8 @@ export async function POST(request) {
       for (const x of uniqueItems) {
         await prisma.usuarioAlimento.upsert({
           where: { usuarioId_alimentoId: { usuarioId: userId, alimentoId: x.alimentoId } },
-          update: { categoria: x.categoria, prioridad: x.prioridad },
-          create: { usuarioId: userId, alimentoId: x.alimentoId, categoria: x.categoria, prioridad: x.prioridad },
+          update: { categoria: x.categoria, categoria_enum: x.categoria_enum, prioridad: x.prioridad },
+          create: { usuarioId: userId, alimentoId: x.alimentoId, categoria: x.categoria, categoria_enum: x.categoria_enum, prioridad: x.prioridad },
         });
       }
       const total = await prisma.usuarioAlimento.count({ where: { usuarioId: userId } });
@@ -132,7 +147,7 @@ export async function POST(request) {
       // Reemplazar por lista exacta
       await prisma.usuarioAlimento.deleteMany({ where: { usuarioId: userId } });
       for (const x of uniqueItems) {
-        await prisma.usuarioAlimento.create({ data: { usuarioId: userId, alimentoId: x.alimentoId, categoria: x.categoria, prioridad: x.prioridad } });
+        await prisma.usuarioAlimento.create({ data: { usuarioId: userId, alimentoId: x.alimentoId, categoria: x.categoria, categoria_enum: x.categoria_enum, prioridad: x.prioridad } });
       }
       return NextResponse.json({ ok: true, count: uniqueItems.length, mode: "replace" });
     }

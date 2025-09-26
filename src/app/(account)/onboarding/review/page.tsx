@@ -77,6 +77,8 @@ export default function OnboardingReviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ onboarding_step: "review", terminos_aceptados: true }),
       });
+      // Prefetch de consejo IA en background (sin forzar long/ensureFull). Usará el modelo flash del plan gratuito.
+      try { fetch("/api/account/advice", { method: "POST" }); } catch {}
       router.push("/onboarding/advice");
     } catch {
       toast.error("No se pudo continuar");
@@ -215,6 +217,10 @@ export default function OnboardingReviewPage() {
             <div>
               <div className="font-medium">Snacks ({(prefs?.snacks || []).length})</div>
               <div className="text-muted-foreground">{(prefs?.snacks || []).join(", ") || "-"}</div>
+            </div>
+            <div>
+              <div className="font-medium">Bebidas e infusiones ({(prefs?.beverages || []).length})</div>
+              <div className="text-muted-foreground">{(prefs?.beverages || []).join(", ") || "-"}</div>
             </div>
           </div>
         )}

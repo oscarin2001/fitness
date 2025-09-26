@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
+import WeeklyPlanByDay, { WeeklyDay } from "@/components/WeeklyPlanByDay";
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,8 +53,78 @@ export default function PlanPage() {
   const [rowHours, setRowHours] = useState<Record<string, string>>({}); // horario por fila (UI), clave tipo:idx
   // Rango de días movido a la vista de Insights
   const [hydrationNotified, setHydrationNotified] = useState(false);
+  const [profile, setProfile] = useState<any | null>(null);
+  const [weeklyPlan, setWeeklyPlan] = useState<WeeklyDay[] | null>(null);
+  const [planAIWeekly, setPlanAIWeekly] = useState<WeeklyDay[] | null>(null);
+  const [beveragesPlan, setBeveragesPlan] = useState<{ nombre: string; ml: number; momento: string }[] | null>(null);
+  const [showMacros, setShowMacros] = useState(false);
 
+  const today = useMemo(() => new Date(), []);
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [selectedDate, setSelectedDate] = useState<string>(todayStr);
+
+  // Fecha actual legible arriba
+  const nowHuman = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(today);
+    } catch { return today.toDateString(); }
+  }, [today]);
+
+  // Helper fechas
+  function isoDate(d: Date) {
+    return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString().slice(0, 10);
+  }
+
+  // Marcar todo el día como cumplido o deshacer
+  async function toggleAllForDay() {
+    if (!items || !items.length) return;
+    // Determinar si todas están cumplidas según estado actual
+    const tipos = Array.from(new Set(items.map((i) => i.tipo)));
+    const allDone = tipos.every(t => compliance[t]);
+    setSaving("__all");
+    try {
+      for (const tipo of tipos) {
+        const current = !!compliance[tipo];
+        const target = !allDone; // si todas están done -> desmarcar; si no -> marcar
+        if (current === target) continue;
+        // Necesitamos una hora válida; si no hay, usar preset o 12:00 como fallback seguro
+        const k = hourKey(tipo, 0);
+        const effectiveHour = rowHours[k] ?? presetHourForRow(tipo, 0) ?? "12:00";
+        await fetch("/api/account/meal-plan/compliance", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tipo, cumplido: target, date: selectedDate, hora: effectiveHour }),
+        });
+      }
+      // Refrescar estado de cumplimiento
+      const compRes = await fetch(`/api/account/meal-plan/compliance?date=${selectedDate}`);
+      const compJson = await compRes.json();
+      const map: Record<string, boolean> = {};
+      (compJson.items || []).forEach((r: ComplianceRow) => { map[r.comida_tipo] = !!r.cumplido; });
+      setCompliance(map);
+      toast.success(allDone ? "Se desmarcaron todas las comidas" : "¡Día marcado como cumplido!");
+    } catch {
+      toast.error("No se pudo actualizar el día");
+    } finally {
+      setSaving(null);
+    }
+  }
+  function addDays(base: Date, n: number) {
+    const d = new Date(base); d.setDate(d.getDate() + n); return d;
+  }
+  // Tira de 7 días centrada en hoy (Lun-Dom de la semana actual)
+  const weekDates = useMemo(() => {
+    const day = today.getDay(); // 0=Dom..6=Sáb
+    const diffToMon = ((day + 6) % 7); // días desde lunes
+    const monday = addDays(today, -diffToMon);
+    const arr = Array.from({ length: 7 }).map((_, i) => addDays(monday, i));
+    return arr.map((d) => {
+      const iso = isoDate(d);
+      const weekdayShort = new Intl.DateTimeFormat('es-ES', { weekday: 'short' }).format(d).replace('.', '');
+      const dayNum = d.getDate();
+      return { iso, label: `${weekdayShort} ${dayNum}` };
+    });
+  }, [today]);
 
   // Busca una hora preestablecida para un tipo; tolera variaciones de mayúsculas y variantes Snack_* cayendo a Snack
   function presetHourFor(tipo: string): string | null {
@@ -105,14 +177,16 @@ export default function PlanPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [planRes, compRes, sumRes] = await Promise.all([
+        const [planRes, compRes, sumRes, aiPlanRes] = await Promise.all([
           fetch("/api/account/meal-plan"),
-          fetch(`/api/account/meal-plan/compliance?date=${todayStr}`),
+          fetch(`/api/account/meal-plan/compliance?date=${selectedDate}`),
           fetch("/api/account/dashboard/summary", { cache: "no-store" }),
+          fetch("/api/account/plan", { cache: "no-store" }),
         ]);
         const planJson = await planRes.json();
         const compJson = await compRes.json();
         const sumJson = await sumRes.json().catch(() => ({}));
+        const aiPlanJson = await aiPlanRes.json().catch(() => ({}));
         setItems(planJson.items || []);
         const map: Record<string, boolean> = {};
         (compJson.items || []).forEach((r: ComplianceRow) => {
@@ -122,6 +196,19 @@ export default function PlanPage() {
         if (sumRes.ok) {
           setObjetivos(sumJson?.objetivos || null);
           setHidratacion(sumJson?.hidratacion || null);
+        }
+        // Leer plan_ai semanal y bebidas si existen
+        if (aiPlanRes.ok && aiPlanJson) {
+          const w = aiPlanJson?.plan_ai?.weekly;
+          if (Array.isArray(w) && w.length) setPlanAIWeekly(w);
+          const bev = aiPlanJson?.plan_ai?.beverages?.items;
+          if (Array.isArray(bev) && bev.length) setBeveragesPlan(
+            bev.map((b: any) => ({
+              nombre: (b?.nombre || b?.name || 'Bebida').toString(),
+              ml: Math.min(250, Math.max(0, Number(b?.ml) || 0)),
+              momento: (b?.momento || 'General').toString()
+            }))
+          );
         }
         // Cargar horarios persistidos
         try {
@@ -137,6 +224,7 @@ export default function PlanPage() {
           const profRes = await fetch("/api/account/profile", { cache: "no-store" });
           if (profRes.ok) {
             const pj = await profRes.json().catch(() => ({}));
+            setProfile(pj?.user || null);
             let prefs = pj?.user?.preferencias_alimentos ?? null;
             if (prefs && typeof prefs === "string") { try { prefs = JSON.parse(prefs); } catch { prefs = null; } }
             const mh = prefs && typeof prefs === "object" ? prefs.mealHours : null;
@@ -151,27 +239,14 @@ export default function PlanPage() {
                   if (cand && typeof mh[cand] === "string") return mh[cand];
                   return undefined;
                 };
-                // base types
-                if (!out["Desayuno"]) {
-                  const h = get("Desayuno"); if (h) out["Desayuno"] = h;
-                }
-                if (!out["Almuerzo"]) {
-                  const h = get("Almuerzo"); if (h) out["Almuerzo"] = h;
-                }
-                if (!out["Cena"]) {
-                  const h = get("Cena"); if (h) out["Cena"] = h;
-                }
-                // snack: elegir Snack o la más temprana de variantes
+                if (!out["Desayuno"]) { const h = get("Desayuno"); if (h) out["Desayuno"] = h; }
+                if (!out["Almuerzo"]) { const h = get("Almuerzo"); if (h) out["Almuerzo"] = h; }
+                if (!out["Cena"]) { const h = get("Cena"); if (h) out["Cena"] = h; }
                 if (!out["Snack"]) {
                   const candidates: string[] = [];
                   const push = (k: string) => { const v = get(k); if (v) candidates.push(v); };
-                  push("Snack");
-                  push("Snack_manana"); push("Snack_mañana"); push("Snack mañana");
-                  push("Snack_tarde"); push("Snack tarde");
-                  if (candidates.length) {
-                    candidates.sort();
-                    out["Snack"] = candidates[0];
-                  }
+                  ["Snack","Snack_manana","Snack_mañana","Snack mañana","Snack_tarde","Snack tarde"].forEach(push);
+                  if (candidates.length) { candidates.sort(); out["Snack"] = candidates[0]; }
                 }
                 return out;
               });
@@ -184,7 +259,62 @@ export default function PlanPage() {
         setLoading(false);
       }
     })();
-  }, [todayStr]);
+  }, [selectedDate]);
+
+  // Construir plan semanal (similar a onboarding) a partir de items persistidos
+  useEffect(() => {
+    // Si existe un plan semanal guardado por la IA, úsalo directamente
+    if (Array.isArray(planAIWeekly) && planAIWeekly.length) { setWeeklyPlan(planAIWeekly); return; }
+    if (!items || !items.length) { setWeeklyPlan(null); return; }
+    // Determinar días activos: usar usuario.dias_dieta si existe (1..7), default 7
+    const dietDaysCount = (profile && typeof profile.dias_dieta === 'number' && profile.dias_dieta >=1 && profile.dias_dieta <=7) ? profile.dias_dieta : 7;
+    const allDayNames = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]; 
+    const dayNames = allDayNames.slice(0, dietDaysCount);
+    const rotationIndex: Record<string, number> = { Lunes:0, Jueves:0, Martes:1, Viernes:1, Miércoles:2, Sábado:2, Domingo:3 };
+    const maxRot = Math.min(3, Math.max(...dayNames.map(d => rotationIndex[d] ?? 0)));
+    const requiredVariants = maxRot + 1; // 1..4
+    // Agrupar por tipo
+    const mealsByType: Record<string, MealItem[]> = {};
+    items.forEach(it => { if (!mealsByType[it.tipo]) mealsByType[it.tipo] = []; mealsByType[it.tipo].push(it); });
+    // Asegurar variantes mínimas clonando receta y renombrando
+    Object.keys(mealsByType).forEach(tipo => {
+      const list = mealsByType[tipo];
+      if (!list.length) { delete mealsByType[tipo]; return; }
+      let idx = 0;
+      while (list.length < requiredVariants) {
+        const base = list[0];
+        const clone: MealItem = JSON.parse(JSON.stringify(base));
+        clone.receta.nombre = `${base.receta.nombre} (${String.fromCharCode(65 + list.length)})`;
+        list.push(clone);
+        idx++;
+        if (idx > 10) break; // safety
+      }
+      // Renombrar primera si no tiene sufijo
+      if (list[0] && !/\([A-D]\)$/.test(list[0].receta.nombre)) {
+        list[0].receta.nombre = `${list[0].receta.nombre} (A)`;
+      }
+    });
+    const typeKeys = Object.keys(mealsByType);
+    const dailyProtein = objetivos?.proteinas || null;
+    const proteinShare = typeKeys.length ? 1 / typeKeys.length : 0;
+    const weekly: WeeklyDay[] = dayNames.map(day => {
+      const rot = rotationIndex[day] ?? 0;
+      const meals = typeKeys.map(tipo => {
+        const variants = mealsByType[tipo];
+        const variant = variants[rot % variants.length];
+        const ingredientes = variant.receta.alimentos || [];
+        const itemsText = ingredientes.map(a => `${a.nombre} (${a.gramos} g)`);
+        return {
+          tipo,
+          receta: { nombre: variant.receta.nombre },
+          targetProteinG: dailyProtein ? Math.round(dailyProtein * proteinShare) : null,
+          itemsText
+        };
+      });
+      return { day, active: true, meals };
+    });
+    setWeeklyPlan(weekly);
+  }, [items, objetivos, profile, planAIWeekly]);
 
   // Notificación al alcanzar objetivo de hidratación
   useEffect(() => {
@@ -258,7 +388,7 @@ export default function PlanPage() {
       const res = await fetch("/api/account/meal-plan/compliance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tipo, cumplido: newVal, date: todayStr, hora: effectiveHour }),
+        body: JSON.stringify({ tipo, cumplido: newVal, date: selectedDate, hora: effectiveHour }),
       });
       if (!res.ok) throw new Error();
       setCompliance((prev) => ({ ...prev, [tipo]: newVal }));
@@ -351,249 +481,66 @@ export default function PlanPage() {
     } catch {}
   }
 
+  const formattedDate = useMemo(() => {
+    const selected = new Date(selectedDate);
+    const todayIso = isoDate(today);
+    const isToday = selectedDate === todayIso;
+    const dayName = new Intl.DateTimeFormat('es-ES', { weekday: 'long' }).format(selected);
+    const formatted = new Intl.DateTimeFormat('es-ES', { year: 'numeric', month: 'long', day: 'numeric' }).format(selected);
+    return isToday ? `Hoy es ${dayName}, ${formatted}` : `${dayName}, ${formatted}`;
+  }, [selectedDate, today]);
+
   return (
     <div className="p-6 space-y-6">
+      {/* Fecha actual arriba (informativa) */}
+      <div className="text-xs text-muted-foreground">Hoy es {nowHuman}</div>
       <div className="flex items-start justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold">Plan de comidas</h1>
           <p className="text-muted-foreground mt-1">Generado por IA • Marca cumplimiento diario</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Link href="/dashboard/insights">
-            <Button variant="outline" size="sm">Ver Insights</Button>
-          </Link>
-        </div>
+        <div className="flex items-center gap-2"></div>
       </div>
 
 
       {error && <div className="text-sm text-red-600">{error}</div>}
 
-      {(() => {
-        // Mostrar aviso si falta hora en alguna comida
-        if (!items || !items.length) return null;
-        const tipos = Array.from(new Set(items.map((i) => i.tipo)));
-        const orderedTipos = [
-          ...tipos.filter((t) => ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase()))
-            .sort((a, b) => ORDER_BASE.findIndex((x) => x.toLowerCase() === a.toLowerCase()) - ORDER_BASE.findIndex((x) => x.toLowerCase() === b.toLowerCase())),
-          ...tipos.filter((t) => !ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase())),
-        ];
-        const rows: Array<{ tipo: string; idx: number }> = [];
-        for (const tipo of orderedTipos) {
-          const group = items.filter((i) => i.tipo === tipo);
-          group.forEach((_it, idx) => rows.push({ tipo, idx }));
-        }
-        const missing = rows.some(({ tipo, idx }) => {
-          const k = `${tipo}:${idx}`;
-          const effectiveHour = rowHours[k] ?? presetHourFor(tipo) ?? "";
-          return !isValidHour(effectiveHour);
-        });
-        return missing ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-800 px-3 py-2 text-sm">
-            Completa la hora en cada comida para poder marcar cumplimiento.
-          </div>
-        ) : null;
-      })()}
-
-      <div className="text-xs uppercase text-muted-foreground">Checklist del día e hidratación</div>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Columna izquierda: checklist del día */}
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>Hoy</CardTitle>
-              <CardDescription>{todayStr}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loading ? (
-                <div className="text-sm text-muted-foreground">Cargando…</div>
-              ) : items.length === 0 ? (
-                <div className="text-sm text-muted-foreground">Aún no tienes un plan. Usa la checklist para guardar recetas por comida.</div>
-              ) : (
-                <div className="space-y-4">
-                  {(() => {
-            // Construir orden dinámico: primero por prioridad conocida, luego el resto
-            const tipos = Array.from(new Set(items.map((i) => i.tipo)));
-            const orderedTipos = [
-              ...tipos.filter((t) => ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase()))
-                .sort((a, b) => ORDER_BASE.findIndex((x) => x.toLowerCase() === a.toLowerCase()) - ORDER_BASE.findIndex((x) => x.toLowerCase() === b.toLowerCase())),
-              ...tipos.filter((t) => !ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase())),
-            ];
-            const rows: Array<{ tipo: string; item: MealItem; idx: number }> = [];
-            for (const tipo of orderedTipos) {
-              const group = items.filter((i) => i.tipo === tipo);
-              group.forEach((it, idx) => rows.push({ tipo, item: it, idx }));
-            }
-            return rows.map(({ tipo, item, idx }) => {
-              const k = hourKey(tipo, idx);
-              const effectiveHour = rowHours[k] ?? presetHourForRow(tipo, idx) ?? "";
-              return (
-                <div key={`${tipo}-${idx}`} className="rounded-lg border p-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 sm:gap-4 items-start">
-                          <div className="min-w-0">
-                            {(() => {
-                              const countSame = rows.filter(r => r.tipo === tipo).length;
-                              const baseLabel = /snack/i.test(tipo)
-                                ? (/mañana|manana/i.test(tipo) ? "Snack (mañana)" : (/tarde/i.test(tipo) ? "Snack (tarde)" : "Snack"))
-                                : tipo;
-                              const finalLabel = `${baseLabel}${(!/snack/i.test(tipo) && countSame > 1) ? ` #${idx+1}` : ""}`;
-                              return (
-                                <div className="font-medium truncate">{finalLabel}: {item.receta.nombre}</div>
-                              );
-                            })()}
-                            <div className="text-xs text-muted-foreground">{item.receta.macros.kcal} kcal • P {item.receta.macros.proteinas}g • G {item.receta.macros.grasas}g • C {item.receta.macros.carbohidratos}g</div>
-                            <div className="mt-1 text-xs text-muted-foreground">
-                              <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-1">
-                                {item.receta.alimentos.map((a) => (
-                                  <span key={a.id} className="inline-block rounded bg-muted px-2 py-0.5">
-                                    {a.nombre} {a.gramos}g
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center sm:items-start gap-2 sm:gap-2 shrink-0 sm:justify-end">
-                            <div className="flex w-full sm:w-auto items-center gap-2">
-                              <input
-                                type="time"
-                                className="h-9 rounded-md border px-2 text-sm min-w-[5.5rem] flex-none"
-                                value={effectiveHour}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setRowHours((prev) => ({ ...prev, [k]: v }));
-                                  // Si es válida la hora, persistir por tipo (API actual)
-                                  if (/^\d{2}:\d{2}$/.test(v)) {
-                                    const variantTipo = variantTipoForSave(tipo, idx);
-                                    setHours((prev) => ({ ...prev, [variantTipo]: v }));
-                                    saveHour(variantTipo, v);
-                                  }
-                                }}
-                                aria-label={`Hora real de ${tipo}${rows.filter(r=>r.tipo===tipo).length>1 ? ` #${idx+1}`: ""}`}
-                              />
-                              <Button
-                                size="sm"
-                                variant={compliance[tipo] ? "default" : "outline"}
-                                onClick={() => toggle(tipo, idx)}
-                                disabled={saving === tipo || !isValidHour(effectiveHour)}
-                                title={!isValidHour(effectiveHour) ? "Ingresa una hora (HH:MM)" : undefined}
-                                className="min-w-[9rem] sm:min-w-[9rem]"
-                              >
-                                {saving === tipo ? "Guardando…" : compliance[tipo] ? `Cumplido${isValidHour(effectiveHour) ? "" : " (hora)"}` : (isValidHour(effectiveHour) ? "Marcar cumplido" : "Ingresar hora")}
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-              );
-            });
-          })()}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Columna derecha: Ingestas de hoy + Hidratación */}
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Ingestas de hoy</CardTitle>
-              <CardDescription>Estado por comida</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loading ? (
-                <div className="text-sm text-muted-foreground">Cargando…</div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-muted-foreground">
-                      <th className="py-2 pr-3">Comida</th>
-                      <th className="py-2 pr-3">Receta</th>
-                      <th className="py-2 pr-3">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      const tipos = Array.from(new Set(items.map((i) => i.tipo)));
-                      const orderedTipos = [
-                        ...tipos.filter((t) => ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase()))
-                          .sort((a, b) => ORDER_BASE.findIndex((x) => x.toLowerCase() === a.toLowerCase()) - ORDER_BASE.findIndex((x) => x.toLowerCase() === b.toLowerCase())),
-                        ...tipos.filter((t) => !ORDER_BASE.map((s) => s.toLowerCase()).includes(t.toLowerCase())),
-                      ];
-                      return orderedTipos.map((t: string) => {
-                        const it = items.find((i) => i.tipo === t);
-                        return (
-                          <tr key={t} className="border-t">
-                            <td className="py-2 pr-3">{t}</td>
-                            <td className="py-2 pr-3">{it ? it.receta.nombre : "—"}</td>
-                            <td className="py-2 pr-3">{compliance[t] ? "Cumplido" : "Pendiente"}</td>
-                          </tr>
-                        );
-                      });
-                    })()}
-                  </tbody>
-                </table>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Hidratación hoy</CardTitle>
-              <CardDescription>Registra agua además de las comidas</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!hidratacion ? (
-                <div className="text-sm text-muted-foreground">Sin datos de hidratación.
-                  <div className="mt-2 flex gap-2">
-                    <Button variant="outline" onClick={() => setWaterGoal(2)}>Fijar objetivo 2 L</Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3 text-sm">
-                  <div className="flex items-center gap-2">
-                    <div><span className="text-muted-foreground">Hoy:</span> {hidratacion.hoy_litros?.toFixed(2)} L</div>
-                    {hidratacion.completado && (
-                      <span className="inline-flex items-center rounded-full bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200 px-2 py-0.5 text-xs font-medium">
-                        Objetivo alcanzado
-                      </span>
-                    )}
-                  </div>
-                  <div><span className="text-muted-foreground">Objetivo:</span> {hidratacion.objetivo_litros ?? "—"} L</div>
-                  {/* Barra de progreso */}
-                  {hidratacion.objetivo_litros ? (
-                    (() => {
-                      const pct = Math.min(100, Math.max(0, (hidratacion.hoy_litros / (hidratacion.objetivo_litros || 1)) * 100));
-                      return (
-                        <div className="w-full">
-                          <div className="h-2 w-full rounded bg-muted overflow-hidden">
-                            <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-                          </div>
-                          <div className="mt-1 text-xs text-muted-foreground">{pct.toFixed(0)}%</div>
-                        </div>
-                      );
-                    })()
-                  ) : null}
-                  <div className="flex gap-2 pt-1">
-                    <Button variant="outline" onClick={() => addWater(0.25)}>+250 ml</Button>
-                    <Button onClick={() => addWater(0.5)}>+500 ml</Button>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+      {/* Tira de fechas (semana actual) */}
+      <div className="-mx-2 px-2">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar py-1">
+          {weekDates.map(d => {
+            const isSelected = d.iso === selectedDate;
+            return (
+              <button
+                key={d.iso}
+                onClick={() => setSelectedDate(d.iso)}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-sm border ${isSelected ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 text-foreground border-muted'}`}
+                aria-pressed={isSelected}
+                aria-label={`Ver plan del ${d.label}`}
+              >
+                {d.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Llamado a explorar Insights */}
+      
+
+      {/* Vista semanal similar a onboarding */}
       <Card>
         <CardHeader>
-          <CardTitle>Más métricas e historial</CardTitle>
-          <CardDescription>Explora tus tendencias de adherencia e hidratación</CardDescription>
+          <CardTitle>Vista semanal (rotación)</CardTitle>
+          <CardDescription>Distribución de tus comidas por días</CardDescription>
         </CardHeader>
         <CardContent>
-          <Link href="/dashboard/insights">
-            <Button>Ir a Insights</Button>
-          </Link>
+          {loading ? (
+            <div className="text-sm text-muted-foreground">Cargando…</div>
+          ) : !weeklyPlan ? (
+            <div className="text-sm text-muted-foreground">No hay datos suficientes para generar la vista semanal.</div>
+          ) : (
+            <WeeklyPlanByDay weekly={weeklyPlan} schedule={hours} />
+          )}
         </CardContent>
       </Card>
 
