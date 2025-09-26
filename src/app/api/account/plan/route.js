@@ -34,7 +34,8 @@ export async function GET(request) {
       },
     });
 
-    const plan_ai = (user?.plan_ai && typeof user.plan_ai === 'object') ? user.plan_ai : null;
+  const plan_ai = (user?.plan_ai && typeof user.plan_ai === 'object') ? user.plan_ai : null;
+  try { console.log('[plan][GET] weekly keys:', Array.isArray(plan_ai?.weekly) ? plan_ai.weekly.map(d=>d.day) : 'none'); } catch {}
     return NextResponse.json({
       plan_ai: plan_ai || null,
       agua_litros_obj: typeof user?.agua_litros_obj === 'number' ? user.agua_litros_obj : null,
