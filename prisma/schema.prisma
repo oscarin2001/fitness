@@ -8,8 +8,10 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  // In dev we point to local file; in production we can override with Turso using adapter
-  url      = env("DATABASE_URL")
+  // Usamos siempre un archivo local como datasource base. En producción Turso se inyecta
+  // vía driver adapter al crear PrismaClient, así que este valor solo sirve para que Prisma
+  // pueda generar el cliente y aplicar migraciones localmente. No requiere DATABASE_URL.
+  url      = "file:./dev.db"
 }
 
 model Usuario {
