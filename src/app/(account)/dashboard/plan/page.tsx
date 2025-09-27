@@ -59,8 +59,18 @@ export default function PlanPage() {
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyDay[] | null>(null);
   const [planAIWeekly, setPlanAIWeekly] = useState<WeeklyDay[] | null>(null);
   const [beveragesPlan, setBeveragesPlan] = useState<{ nombre: string; ml: number; momento: string }[] | null>(null);
-  const [showMacros, setShowMacros] = useState(true); // mostrar macros por defecto
+  // Preferencias UI globales (persisten en localStorage)
+  const [showMacros, setShowMacros] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const v = localStorage.getItem('plan_show_macros');
+    return v === '0' ? false : true;
+  });
   const [expandedMeals, setExpandedMeals] = useState<Set<string>>(() => new Set());
+  const [showDetails, setShowDetails] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const v = localStorage.getItem('plan_show_details');
+    return v === '0' ? false : true;
+  });
   const [showWeekly, setShowWeekly] = useState(false);
   const [openMealMenu, setOpenMealMenu] = useState<string | null>(null);
 
@@ -473,10 +483,39 @@ export default function PlanPage() {
     if (!items || !items.length) return [] as any[];
     const byTipo: Record<string, MealItem> = {};
     items.forEach(it => { if (!byTipo[it.tipo]) byTipo[it.tipo] = it; });
+    // Preferencias: si el usuario activó snack de mañana y de tarde, y solo hay un Snack, expandirlo a ambos
+    try {
+      let prefs = profile?.preferencias_alimentos;
+      if (prefs && typeof prefs === 'string') { try { prefs = JSON.parse(prefs); } catch { prefs = null; } }
+      const enabled = prefs?.enabledMeals;
+      const wantsSnackManana = !!(enabled?.["snack_mañana"] || enabled?.snack_manana);
+      const wantsSnackTarde = !!enabled?.snack_tarde;
+      const hasSnackGeneric = !!byTipo['Snack'];
+      const hasVariants = !!byTipo['Snack_manana'] || !!byTipo['Snack_mañana'] || !!byTipo['Snack_tarde'];
+      if (wantsSnackManana && wantsSnackTarde && hasSnackGeneric && !hasVariants) {
+        // Clonar referencia del Snack genérico a dos variantes para la vista
+        byTipo['Snack_manana'] = byTipo['Snack'];
+        byTipo['Snack_tarde'] = byTipo['Snack'];
+        delete byTipo['Snack'];
+      }
+    } catch {}
     const ordered = ORDER_BASE.filter(k => byTipo[k]);
     Object.keys(byTipo).forEach(k => { if (!ORDER_BASE.includes(k)) ordered.push(k); });
     return ordered.map(k => ({ tipo: k, receta: { nombre: byTipo[k].receta?.nombre }, _item: byTipo[k] }));
   }, [items]);
+
+  // Persistir preferencias globales y sincronizar detalles una vez que selectedWeekdayMeals existe
+  useEffect(() => {
+    try { localStorage.setItem('plan_show_macros', showMacros ? '1' : '0'); } catch {}
+  }, [showMacros]);
+  useEffect(() => {
+    try { localStorage.setItem('plan_show_details', showDetails ? '1' : '0'); } catch {}
+    if (!showDetails) {
+      setExpandedMeals(new Set());
+    } else {
+      setExpandedMeals(new Set(selectedWeekdayMeals.map((m: any) => canonicalTipo(m.tipo))));
+    }
+  }, [showDetails, selectedWeekdayMeals]);
 
   // Cumplimiento global del día
   const dayCompliance = useMemo(() => {
@@ -558,7 +597,9 @@ export default function PlanPage() {
     selectedWeekdayMeals.forEach((m: any) => {
       const full = mealItemFor(m.tipo);
       if (full?.receta?.macros) {
-        const factor = (full.porciones && full.receta.porciones) ? (full.porciones / full.receta.porciones) : 1;
+        // Las macros provistas por el backend ya consideran las porciones efectivas del item.
+        // Para compatibilidad, solo escalamos por porciones del item si existen, sin dividir por receta.porciones.
+        const factor = full.porciones ? full.porciones : 1;
         t.proteinas += (full.receta.macros.proteinas || 0) * factor;
         t.carbohidratos += (full.receta.macros.carbohidratos || 0) * factor;
         t.grasas += (full.receta.macros.grasas || 0) * factor;

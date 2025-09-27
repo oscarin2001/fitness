@@ -16,8 +16,12 @@ const HEUR = {
   fish: { kcal: 120, p: 20, g: 4, c: 0 },
   carb_rice_cooked: { kcal: 130, p: 2.7, g: 0.3, c: 28 },
   carb_quinoa_cooked: { kcal: 120, p: 4.4, g: 1.9, c: 21.3 },
+  carb_oats_dry: { kcal: 370, p: 13, g: 7, c: 60 }, // avena seca por 100 g (aprox)
+  carb_corn_cooked: { kcal: 96, p: 3.4, g: 1.5, c: 21 }, // choclo/maíz cocido por 100 g
   carb_bread_whole: { kcal: 247, p: 13, g: 4.2, c: 41 },
   potato: { kcal: 87, p: 2, g: 0.1, c: 20 },
+  yam: { kcal: 110, p: 2, g: 0.2, c: 27 }, // ñame aprox por 100 g
+  plantain_cooked: { kcal: 116, p: 1.3, g: 0.2, c: 31 }, // plátano macho cocido por 100 g
   oil_olive: { kcal: 884, p: 0, g: 100, c: 0 },
   nuts: { kcal: 600, p: 20, g: 50, c: 20 },
   veg: { kcal: 30, p: 2, g: 0.2, c: 5 },
@@ -25,6 +29,18 @@ const HEUR = {
   yogurt_greek: { kcal: 97, p: 9, g: 5, c: 3.9 },
   cheese: { kcal: 350, p: 25, g: 27, c: 2 },
   beef: { kcal: 250, p: 26, g: 17, c: 0 },
+  // Legumbres cocidas (por 100 g)
+  legumes_cooked: { kcal: 116, p: 9, g: 2, c: 20 }, // lentejas/garbanzos/frijoles cocidos
+  // Lácteos y derivados comunes (por 100 g)
+  yogurt_plain: { kcal: 61, p: 3.5, g: 3.3, c: 4.7 },
+  queso_fresco: { kcal: 260, p: 18, g: 21, c: 2 },
+  // Proteínas vegetales (por 100 g)
+  tofu: { kcal: 76, p: 8, g: 4, c: 1.9 },
+  tempeh: { kcal: 193, p: 20, g: 11, c: 8 },
+  seitan: { kcal: 120, p: 25, g: 2, c: 4 },
+  // Harinas/arepas/tortillas (por 100 g)
+  arepa: { kcal: 218, p: 5, g: 2.6, c: 46 },
+  tortilla_maiz: { kcal: 218, p: 5, g: 2.6, c: 46 },
 };
 
 function estimateMacrosFromNames(porciones, alimentosList) {
@@ -37,12 +53,23 @@ function estimateMacrosFromNames(porciones, alimentosList) {
       if (/aceite.*oliva|olive/.test(name)) return HEUR.oil_olive;
       if (/pistacho|nuez|almendra|mani|maní|avellana|semilla|cacahuate/.test(name)) return HEUR.nuts;
       if (/quinoa/.test(name)) return HEUR.carb_quinoa_cooked;
+      if (/avena/.test(name)) return HEUR.carb_oats_dry;
       if (/(arroz|rice)/.test(name)) return HEUR.carb_rice_cooked;
+      if (/choclo|ma[ií]z/.test(name)) return HEUR.carb_corn_cooked;
+      if (/pl[aá]tano(\s*macho)?|plantain/.test(name)) return HEUR.plantain_cooked;
+      if (/ñame|iname|yame|yam/.test(name)) return HEUR.yam;
+      if (/arepa/.test(name)) return HEUR.arepa;
+      if (/tortilla/.test(name)) return HEUR.tortilla_maiz;
       if (/pan.*integral|whole.*bread/.test(name)) return HEUR.carb_bread_whole;
       if (/papa|patata/.test(name)) return HEUR.potato;
       if (/banana|platan|plátano/.test(name)) return HEUR.fruit_banana;
-      if (/yogur|yogurt/.test(name)) return HEUR.yogurt_greek;
+      if (/yogur|yogurt/.test(name)) return HEUR.yogurt_plain;
+      if (/queso fresco|queso\s+blanco/.test(name)) return HEUR.queso_fresco;
       if (/queso|cheese/.test(name)) return HEUR.cheese;
+      if (/garbanzo|lenteja|frijol|fr[ií]jol|habichuela|caraota|alubia/.test(name)) return HEUR.legumes_cooked;
+      if (/tofu/.test(name)) return HEUR.tofu;
+      if (/tempeh/.test(name)) return HEUR.tempeh;
+      if (/seit[aá]n|gluten\s*(de\s*trigo)?/.test(name)) return HEUR.seitan;
       if (/marisco|pescado|atun|atún|salmon|salm[oó]n|tilapia|merluza/.test(name)) return HEUR.fish;
       if (/huevo/.test(name)) return HEUR.egg;
       if (/pollo|pavo|pechuga/.test(name)) return HEUR.protein;
@@ -86,10 +113,36 @@ function computeMacrosFromList(porciones, alimentosList) {
     const factor = gramos / 100;
     const alim = ra.alimento;
     if (!alim) continue;
-    kcal += (alim.calorias || 0) * factor;
-    p += (alim.proteinas || 0) * factor;
-    g += (alim.grasas || 0) * factor;
-    c += (alim.carbohidratos || 0) * factor;
+    // Calcular macros de BD escaladas
+    const db_kcal = ((alim.calorias || 0) * factor) || 0;
+    const db_p = ((alim.proteinas || 0) * factor) || 0;
+    const db_g = ((alim.grasas || 0) * factor) || 0;
+    const db_c = ((alim.carbohidratos || 0) * factor) || 0;
+
+    // Estimación heurística por nombre (usa gramos internamente)
+    const est = estimateMacrosFromNames(1, [ra]);
+    const est_kcal = est.kcal || 0;
+    const est_p = est.proteinas || 0;
+    const est_g = est.grasas || 0;
+    const est_c = est.carbohidratos || 0;
+
+    // Si la BD no tiene macros (o son cero), usar heurística
+    const dbMissing = (db_kcal + db_p + db_g + db_c) === 0;
+    if (dbMissing) {
+      kcal += est_kcal; p += est_p; g += est_g; c += est_c; continue;
+    }
+
+    // Si la BD está muy por debajo de la heurística (>30% menor), usar el máximo por componente
+    const tooLow = (db_kcal < est_kcal * 0.7) || (db_p < est_p * 0.7) || (db_g < est_g * 0.7) || (db_c < est_c * 0.7);
+    if (tooLow) {
+      kcal += Math.max(db_kcal, est_kcal);
+      p += Math.max(db_p, est_p);
+      g += Math.max(db_g, est_g);
+      c += Math.max(db_c, est_c);
+    } else {
+      // BD razonable: usar valores de BD
+      kcal += db_kcal; p += db_p; g += db_g; c += db_c;
+    }
   }
   return {
     kcal: Math.round(kcal * (porciones || 1)),
@@ -114,7 +167,7 @@ export async function GET(request) {
         include: { receta: { include: { alimentos: { include: { alimento: true } } } } },
         orderBy: { comida_tipo: "asc" },
       }),
-      prisma.usuario.findUnique({ where: { id: userId }, select: { plan_ai: true } }),
+      prisma.usuario.findUnique({ where: { id: userId }, select: { plan_ai: true, preferencias_alimentos: true } }),
     ]);
 
     const planAIWeekly = (user?.plan_ai && typeof user.plan_ai === 'object' && user.plan_ai.weekly && Array.isArray(user.plan_ai.weekly)) ? user.plan_ai.weekly : null;
@@ -175,17 +228,24 @@ export async function GET(request) {
             for (const r of recetas) recetasMap[r.id] = r;
           }
           const planByTipo = new Map(plan.map(p => [p.comida_tipo, p]));
-          const items = [];
+          let items = [];
           // Heurística básica para macros por nombre (solo para sintéticos)
           const HEUR_WORDS = [
-            { re: /pollo|pechuga|pavo|atun|atún|pescado|salmon|salm[oó]n|huevo|claras?/, p:25, g:3, c:0, kcal:160 },
+            // Proteínas animales (incluye sardina/caballa)
+            { re: /pollo|pechuga|pavo|atun|atún|pescado|salmon|salm[oó]n|sardina|caballa|tilapia|merluza|huevo|claras?/, p:25, g:3, c:0, kcal:160 },
             { re: /carne|res|ternera|vacuno|lomo|cerdo|beef/, p:22, g:15, c:0, kcal:230 },
+            // Carbohidratos
             { re: /arroz|quinoa|pasta|fideo|espagueti|cuscus|cuscús/, p:3, g:1, c:28, kcal:140 },
+            { re: /avena/, p:13, g:7, c:60, kcal:370 },
             { re: /pan|tostada|arepa|tortilla/, p:9, g:4, c:40, kcal:240 },
             { re: /papa|patata|boniato|camote|yuca/, p:2, g:0, c:20, kcal:90 },
+            // Frutas
             { re: /fruta|manzana|banana|pl[aá]tano|pera|naranja|fresa|frutilla|uva/, p:1, g:0, c:14, kcal:60 },
-            { re: /aceite|oliva|mantequilla|aguacate|palta|nuez|almendra|mani|maní|pistacho|semilla/, p:4, g:18, c:4, kcal:190 },
+            // Grasas y frutos secos
+            { re: /aceite|oliva|mantequilla|aguacate|palta|nuez|almendra|mani|maní|pistacho|semilla|frutos\s*secos/, p:4, g:18, c:4, kcal:190 },
+            // Lácteos
             { re: /yogur|yogurt|queso|lacteo|lácteo/, p:9, g:5, c:4, kcal:110 },
+            // Verduras
             { re: /verdura|ensalada|brocoli|br[oó]coli|lechuga|espinaca|zanahoria|pepino|tomate|calabac[ií]n/, p:2, g:0, c:5, kcal:30 }
           ];
           function estimateMacrosFromTextFoods(list) {
@@ -274,13 +334,50 @@ export async function GET(request) {
               },
             });
           }
-          return NextResponse.json({ items });
+          // Expandir snacks en dos (mañana/tarde) si preferencias lo requieren y solo hay uno
+          try {
+            let enabledMeals = null;
+            const rawPrefs = user?.preferencias_alimentos;
+            if (rawPrefs) enabledMeals = typeof rawPrefs === 'string' ? JSON.parse(rawPrefs)?.enabledMeals : rawPrefs?.enabledMeals;
+            const wantsSnackManana = !!(enabledMeals?.["snack_mañana"] || enabledMeals?.snack_manana);
+            const wantsSnackTarde = !!enabledMeals?.snack_tarde;
+            if (wantsSnackManana && wantsSnackTarde) {
+              const snacks = items.filter(it => /^Snack/i.test(it.tipo));
+              if (snacks.length === 1) {
+                // Cambiar el existente a Snack_manana y clonar a Snack_tarde
+                snacks[0].tipo = 'Snack_manana';
+                const clone = JSON.parse(JSON.stringify(snacks[0]));
+                clone.id = (clone.id || 0) - 1; // id temporal negativo si fuera necesario
+                clone.tipo = 'Snack_tarde';
+                items.push(clone);
+              }
+            }
+          } catch {}
+          // Expandir snacks en dos (mañana/tarde) si preferencias lo requieren y solo hay uno
+    try {
+      let enabledMeals = null;
+      const rawPrefs = user?.preferencias_alimentos;
+      if (rawPrefs) enabledMeals = typeof rawPrefs === 'string' ? JSON.parse(rawPrefs)?.enabledMeals : rawPrefs?.enabledMeals;
+      const wantsSnackManana = !!(enabledMeals?.["snack_mañana"] || enabledMeals?.snack_manana);
+      const wantsSnackTarde = !!enabledMeals?.snack_tarde;
+      if (wantsSnackManana && wantsSnackTarde) {
+        const snacks = items.filter(it => /^Snack/i.test(it.tipo));
+        if (snacks.length === 1) {
+          snacks[0].tipo = 'Snack_manana';
+          const clone = JSON.parse(JSON.stringify(snacks[0]));
+          clone.id = (clone.id || 0) - 1;
+          clone.tipo = 'Snack_tarde';
+          items.push(clone);
+        }
+      }
+    } catch {}
+    return NextResponse.json({ items });
         }
       }
     }
 
     // Fallback final: no weekly o no coincidió el día => plan base (A)
-  const items = [];
+  let items = [];
     for (const p of plan) {
       const overrides = (p.overrides && typeof p.overrides === "object") ? p.overrides : null;
       const baseList = [...p.receta.alimentos];
