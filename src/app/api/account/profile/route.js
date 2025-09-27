@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
 import jwt from "jsonwebtoken";
+import { getToken } from "next-auth/jwt";
 import { scryptSync, timingSafeEqual } from "crypto";
 
 function getCookieName() {
@@ -10,12 +11,25 @@ function getCookieName() {
 }
 
 async function getUserIdFromRequest(request) {
+  // 1) Intentar token de NextAuth
+  const secret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
+  if (secret) {
+    try {
+      const nt = await getToken({ req: request, secret });
+      if (nt?.email) {
+        // Buscar auth por email para obtener usuarioId
+        const auth = await prisma.auth.findUnique({ where: { email: nt.email.toLowerCase() } });
+        if (auth?.usuarioId) return auth.usuarioId;
+      }
+    } catch {}
+  }
+  // 2) Fallback cookie legacy
   try {
     const cookieName = getCookieName();
-    const token = request.cookies.get(cookieName)?.value;
-    const secret = process.env.AUTH_SECRET;
-    if (!token || !secret) return null;
-    const decoded = jwt.verify(token, secret);
+    const raw = request.cookies.get(cookieName)?.value;
+    const legacySecret = process.env.AUTH_SECRET;
+    if (!raw || !legacySecret) return null;
+    const decoded = jwt.verify(raw, legacySecret);
     return parseInt(decoded.sub, 10);
   } catch {
     return null;

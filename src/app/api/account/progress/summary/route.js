@@ -1,23 +1,39 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
-import jwt from "jsonwebtoken";
+import { getToken } from "next-auth/jwt";
+import jwt from "jsonwebtoken"; // legacy
 
-function getCookieName() {
-  return process.env.NODE_ENV === "production"
-    ? "__Secure-authjs.session-token"
-    : "authjs.session-token";
-}
-
-async function getUserIdFromRequest(request) {
+async function resolveUserId(req) {
   try {
-    const cookieName = getCookieName();
-    const token = request.cookies.get(cookieName)?.value;
-    if (!token) return null;
-    const payload = jwt.verify(token, process.env.AUTH_SECRET);
-    return payload?.userId || payload?.sub || null;
-  } catch {
-    return null;
-  }
+    const token = await getToken({ req });
+    if (token) {
+      if (token.userId != null) {
+        const n = Number(token.userId); if (Number.isFinite(n)) return n;
+      }
+      const raw = token.id || token.sub;
+      if (raw && String(raw).length > 15 && token.email) {
+        try { const auth = await prisma.auth.findUnique({ where: { email: String(token.email).toLowerCase() }, select: { usuarioId: true } }); if (auth?.usuarioId) return auth.usuarioId; } catch {}
+      } else if (raw) {
+        const n = Number(raw); if (Number.isFinite(n)) return n;
+      }
+      if (token.email) {
+        try { const auth = await prisma.auth.findUnique({ where: { email: String(token.email).toLowerCase() }, select: { usuarioId: true } }); if (auth?.usuarioId) return auth.usuarioId; } catch {}
+      }
+    }
+  } catch {}
+  try {
+    const cookieName = process.env.NODE_ENV === 'production' ? '__Secure-authjs.session-token' : 'authjs.session-token';
+    const raw = req.cookies.get(cookieName)?.value;
+    const secret = process.env.AUTH_SECRET;
+    if (!raw || !secret) return null;
+    const decoded = jwt.verify(raw, secret);
+    let val = decoded?.userId ?? decoded?.sub;
+    if (val && String(val).length > 15 && decoded?.email) {
+      try { const auth = await prisma.auth.findUnique({ where: { email: String(decoded.email).toLowerCase() }, select: { usuarioId: true } }); if (auth?.usuarioId) return auth.usuarioId; } catch {}
+    }
+    const n = Number(val); if (Number.isFinite(n)) return n;
+  } catch {}
+  return null;
 }
 
 function linearRegression(points) {
@@ -36,7 +52,7 @@ function linearRegression(points) {
 
 export async function GET(request) {
   try {
-    const userId = await getUserIdFromRequest(request);
+  const userId = await resolveUserId(request);
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
     const { searchParams } = new URL(request.url);

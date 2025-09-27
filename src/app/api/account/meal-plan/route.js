@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
-import jwt from "jsonwebtoken";
+import { getToken } from "next-auth/jwt";
+import jwt from "jsonwebtoken"; // legacy fallback
 
 function getCookieName() {
-  return process.env.NODE_ENV === "production"
-    ? "__Secure-authjs.session-token"
-    : "authjs.session-token";
+  return process.env.NODE_ENV === "production" ? "__Secure-authjs.session-token" : "authjs.session-token";
 }
 
 // Estimación heurística por nombre cuando no hay datos en la BD
@@ -92,17 +91,48 @@ function estimateMacrosFromNames(porciones, alimentosList) {
   };
 }
 
-async function getUserIdFromRequest(request) {
+async function resolveUserId(req) {
+  // 1) NextAuth token
+  try {
+    const token = await getToken({ req });
+    if (token) {
+      // Prefer explicit internal userId if present
+      if (token.userId != null) {
+        const n = Number(token.userId);
+        if (Number.isFinite(n)) return n;
+      }
+      // If provider sub/id is too large (Google big int), fall back to email lookup
+      const raw = token.id || token.sub;
+      if (raw && String(raw).length > 15 && token.email) {
+        try {
+          const auth = await prisma.auth.findUnique({ where: { email: String(token.email).toLowerCase() }, select: { usuarioId: true } });
+          if (auth?.usuarioId) return auth.usuarioId;
+        } catch {}
+      } else if (raw) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  } catch {}
+  // 2) Legacy fallback
   try {
     const cookieName = getCookieName();
-    const token = request.cookies.get(cookieName)?.value;
+    const raw = req.cookies.get(cookieName)?.value;
     const secret = process.env.AUTH_SECRET;
-    if (!token || !secret) return null;
-    const decoded = jwt.verify(token, secret);
-    return parseInt(decoded.sub, 10);
-  } catch {
-    return null;
-  }
+    if (!raw || !secret) return null;
+    const decoded = jwt.verify(raw, secret);
+    let val = decoded?.userId ?? decoded?.sub;
+    // Guard against huge Google-like IDs by falling back to email if available
+    if (val && String(val).length > 15 && decoded?.email) {
+      try {
+        const auth = await prisma.auth.findUnique({ where: { email: String(decoded.email).toLowerCase() }, select: { usuarioId: true } });
+        if (auth?.usuarioId) return auth.usuarioId;
+      } catch {}
+    }
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  } catch {}
+  return null;
 }
 
 function computeMacrosFromList(porciones, alimentosList) {
@@ -154,7 +184,7 @@ function computeMacrosFromList(porciones, alimentosList) {
 
 export async function GET(request) {
   try {
-    const userId = await getUserIdFromRequest(request);
+  const userId = await resolveUserId(request);
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
     const { searchParams } = new URL(request.url);
@@ -426,7 +456,7 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
-    const userId = await getUserIdFromRequest(request);
+  const userId = await resolveUserId(request);
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
     const body = await request.json();

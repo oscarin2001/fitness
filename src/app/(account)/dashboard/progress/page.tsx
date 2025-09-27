@@ -1,5 +1,4 @@
 "use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -7,10 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, AreaChart, Area } from "recharts";
-import { TrendingUp } from "lucide-react";
-import { ChartContainer, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
-import { Calendar } from "@/components/ui/calendar";
+// Se elimina el modal y gráficas de tendencias; se usa toggle inline
+import { Sparkles, ChevronDown } from "lucide-react";
+import { Calendar } from "@/components/ui/calendar"; // (si luego se vuelve a usar calendario visual)
 
 // Objetivos IA
 type Objectives = {
@@ -284,85 +282,7 @@ export default function DashboardProgressPage() {
     }
   }, [calData.nextControl]);
 
-  const weekCards = useMemo(() => [
-    { title: "Peso prom. (sem)", value: summaryWeek?.weight?.avg ?? "-" },
-    { title: "Pend. kg/sem", value: summaryWeek?.weight?.slope_kg_per_week ?? "-" },
-    { title: "%Grasa prom.", value: summaryWeek?.bodyfat?.avg_percent ?? "-" },
-    { title: "Δ %Grasa/sem", value: summaryWeek?.bodyfat?.slope_percent_points_per_week ?? "-" },
-    { title: "%Músculo prom.", value: summaryWeek?.muscle?.avg_percent ?? "-" },
-    { title: "Δ %Músculo/sem", value: summaryWeek?.muscle?.slope_percent_points_per_week ?? "-" },
-  ], [summaryWeek]);
-
-  // Series para gráficas (últimos 60-90 días según data disponible)
-  const weightSeries = useMemo(() => {
-    const arr = Array.isArray(lastItems) ? [...lastItems] : [];
-    arr.reverse(); // cronológico ascendente
-    return arr.map((it: any) => ({
-      d: String(new Date(it.fecha).toISOString().slice(5,10)),
-      v: it.peso_kg != null ? Number(it.peso_kg) : null,
-    })).filter((x) => x.v != null);
-  }, [lastItems]);
-  const bfSeries = useMemo(() => {
-    const arr = Array.isArray(lastItems) ? [...lastItems] : [];
-    arr.reverse();
-    return arr.map((it: any) => ({
-      d: String(new Date(it.fecha).toISOString().slice(5,10)),
-      v: it.grasa_percent != null ? Number(it.grasa_percent) : null,
-    })).filter((x) => x.v != null);
-  }, [lastItems]);
-  const muscleSeries = useMemo(() => {
-    const arr = Array.isArray(lastItems) ? [...lastItems] : [];
-    arr.reverse();
-    return arr.map((it: any) => ({
-      d: String(new Date(it.fecha).toISOString().slice(5,10)),
-      v: it.musculo_percent != null ? Number(it.musculo_percent) : null,
-    })).filter((x) => x.v != null);
-  }, [lastItems]);
-
-  // Área de mejora según objetivo: %Músculo si ganar, %Grasa si bajar
-  const improvementTarget = useMemo(() => {
-    const obj = String(profile?.objetivo || "");
-    return obj === "Ganar_musculo" ? "muscle" : "bodyfat";
-  }, [profile?.objetivo]);
-
-  const selectedSeries = useMemo(() => {
-    return improvementTarget === "muscle" ? muscleSeries : bfSeries;
-  }, [improvementTarget, muscleSeries, bfSeries]);
-
-  const chartLabel = improvementTarget === "muscle" ? "% Músculo" : "% Grasa";
-
-  const areaData = useMemo(() => {
-    // Usar hasta últimos ~30 puntos
-    const tail = selectedSeries.slice(-30);
-    return tail.map((p: any) => ({ label: p.d, metric: p.v as number }));
-  }, [selectedSeries]);
-
-  const trendInfo = useMemo(() => {
-    if (selectedSeries.length < 2) return null as null | { change: number; pct: number | null; improving: boolean };
-    const windowPts = selectedSeries.slice(-(measureIntervalWeeks * 7));
-    const first = windowPts[0]?.v;
-    const last = windowPts[windowPts.length - 1]?.v;
-    if (first == null || last == null) return null;
-    const change = Number((last - first).toFixed(1));
-    const improving = improvementTarget === "muscle" ? change > 0 : change < 0;
-    const pct = first ? Number((((last - first) / first) * 100).toFixed(1)) : null;
-    return { change, pct, improving };
-  }, [selectedSeries, measureIntervalWeeks, improvementTarget]);
-
-  const areaConfig: ChartConfig = {
-    metric: {
-      label: chartLabel,
-      color: "var(--chart-1)",
-    },
-  };
-
-  const objectivesCards = useMemo(() => [
-    { title: "Objetivo kcal", value: objectives?.kcal ?? "-" },
-    { title: "Prot (g)", value: objectives?.proteinas ?? "-" },
-    { title: "Grasas (g)", value: objectives?.grasas ?? "-" },
-    { title: "Carbs (g)", value: objectives?.carbohidratos ?? "-" },
-    { title: "Agua (L)", value: objectives?.agua_litros ?? "-" },
-  ], [objectives]);
+  // Eliminadas series y métricas de tendencias para vista simplificada
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -445,6 +365,8 @@ export default function DashboardProgressPage() {
     }
   }
 
+  const [showNavyDetails, setShowNavyDetails] = useState(false);
+
   return (
     <div className="p-6 space-y-6">
       <Toaster />
@@ -453,15 +375,28 @@ export default function DashboardProgressPage() {
           <h1 className="text-2xl font-semibold flex items-center gap-2">Progreso corporal</h1>
           <p className="text-muted-foreground mt-1 text-sm">Registra tu peso, %grasa, %músculo y medidas.</p>
         </div>
+    {/* Modal eliminado: ahora se muestra inline */}
         
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Método US Navy al lado del formulario */}
+        {/* Método US Navy con toggle inline */}
         <Card className="md:col-span-1">
-          <CardHeader>
-            <CardTitle>Método US Navy</CardTitle>
-            <CardDescription>Cómo calculamos tu composición</CardDescription>
+          <CardHeader className="flex flex-row items-start justify-between gap-2">
+            <div>
+              <CardTitle>Método US Navy</CardTitle>
+              <CardDescription>Cómo calculamos tu composición</CardDescription>
+            </div>
+            <Button
+              size="sm"
+              variant={showNavyDetails ? "secondary" : "outline"}
+              onClick={() => setShowNavyDetails((v) => !v)}
+              aria-expanded={showNavyDetails}
+              className="flex items-center gap-1"
+            >
+              {showNavyDetails ? "Ocultar" : "Detalles"}
+              <ChevronDown className={`h-4 w-4 transition-transform ${showNavyDetails ? 'rotate-180' : ''}`} />
+            </Button>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground space-y-2">
             <p>
@@ -473,6 +408,19 @@ export default function DashboardProgressPage() {
               <li>Precisión típica: ±3–4 pp en %grasa con medición consistente (hasta ±5–6 si hay variaciones).</li>
               <li>Consejo: mide a la misma hora, tras ir al baño, sin bombeo, y repite en el mismo punto.</li>
             </ul>
+            {showNavyDetails && (
+              <div className="mt-2 border-t pt-3 space-y-2 animate-in fade-in-0">
+                <p className="text-xs leading-relaxed">
+                  La fórmula US Navy estima el % de grasa a partir de perímetros. Es sensible a la técnica: usa siempre la misma cinta y tensión ligera.
+                  Repite 2–3 mediciones y promedia para reducir ruido. No sustituye métodos clínicos, pero es muy útil para seguir tendencias.
+                </p>
+                <ul className="text-xs list-disc pl-5 space-y-1">
+                  <li>No te obsesiones con un único día: observa semanas.</li>
+                  <li>Si cambias horario o hidratación, la variación aumenta.</li>
+                  <li>Combina con fotos y rendimiento para una visión completa.</li>
+                </ul>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -544,7 +492,7 @@ export default function DashboardProgressPage() {
                     {/* Se eliminaron campos no requeridos por US Navy */}
                     {/* Botón Estimar reubicado al final de las mediciones */}
                     <div className="md:col-span-3 flex justify-end">
-                      <Button type="button" variant="secondary" onClick={estimateBodyFat}>Calcular composición corporal (método US Navy)</Button>
+                      <Button size="sm" type="button" variant="secondary" onClick={estimateBodyFat}>Calcular (método US Navy)</Button>
                     </div>
                     {/* Campos derivados (solo lectura) */}
                     <div>
@@ -573,175 +521,30 @@ export default function DashboardProgressPage() {
                 </CardContent>
               </Card>
 
-          {/* Progreso según objetivo (Area Chart) */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Progreso según objetivo</CardTitle>
-              <CardDescription>
-                {improvementTarget === "muscle" ? "Tendencia de % músculo" : "Tendencia de % grasa"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {areaData.length ? (
-                <ChartContainer config={areaConfig}>
-                  <div className="h-64 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={areaData} margin={{ left: 12, right: 12 }}>
-                        <CartesianGrid vertical={false} />
-                        <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
-                        <Tooltip cursor={false} content={ChartTooltipContent({ indicator: "line" })} />
-                        <Area dataKey="metric" type="natural" fill="var(--color-metric)" fillOpacity={0.4} stroke="var(--color-metric)" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </ChartContainer>
-              ) : (
-                <div className="text-xs text-muted-foreground">Sin datos suficientes</div>
-              )}
-            </CardContent>
-            <CardFooter>
-              <div className="flex w-full items-start gap-2 text-sm">
-                <div className="grid gap-1">
-                  {trendInfo ? (
-                    <div className="flex items-center gap-2 leading-none font-medium">
-                      {trendInfo.improving ? "Mejorando" : "Empeorando"} {trendInfo.pct != null ? `(${trendInfo.pct}% )` : ""}
-                      <TrendingUp className="h-4 w-4" />
-                    </div>
-                  ) : (
-                    <div className="text-muted-foreground">Sin ventana suficiente para evaluar tendencia</div>
-                  )}
-                  <div className="text-muted-foreground leading-none">
-                    Ventana: {measureIntervalWeeks} semana(s)
-                  </div>
-                </div>
-              </div>
-            </CardFooter>
-          </Card>
+          {/* Se eliminó la tarjeta 'Progreso según objetivo' para simplificar la vista en PWA */}
             </div>
 
         <div className="md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Card className="sm:col-span-2">
-            <CardHeader>
-              <CardTitle>Tendencias (últimos registros)</CardTitle>
-              <CardDescription>Visualiza la evolución general</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="h-40">
-                  <div className="text-xs text-muted-foreground mb-1">Peso (kg)</div>
-                  {weightSeries.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={weightSeries} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="d" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={16} />
-                        <YAxis width={28} tick={{ fontSize: 10 }} domain={["auto","auto"]} />
-                        <Tooltip formatter={(v:any)=>`${v} kg`} labelFormatter={(l)=>`Fecha: ${l}`} />
-                        <Line type="monotone" dataKey="v" stroke="#3b82f6" strokeWidth={2} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="text-xs text-muted-foreground">Sin datos suficientes</div>
-                  )}
-                </div>
-                <div className="h-40">
-                  <div className="text-xs text-muted-foreground mb-1">% Grasa</div>
-                  {bfSeries.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={bfSeries} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="d" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={16} />
-                        <YAxis width={28} tick={{ fontSize: 10 }} domain={["auto","auto"]} />
-                        <Tooltip formatter={(v:any)=>`${v}%`} labelFormatter={(l)=>`Fecha: ${l}`} />
-                        <Line type="monotone" dataKey="v" stroke="#f97316" strokeWidth={2} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="text-xs text-muted-foreground">Sin datos suficientes</div>
-                  )}
-                </div>
-                <div className="h-40">
-                  <div className="text-xs text-muted-foreground mb-1">% Músculo</div>
-                  {muscleSeries.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={muscleSeries} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="d" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={16} />
-                        <YAxis width={28} tick={{ fontSize: 10 }} domain={["auto","auto"]} />
-                        <Tooltip formatter={(v:any)=>`${v}%`} labelFormatter={(l)=>`Fecha: ${l}`} />
-                        <Line type="monotone" dataKey="v" stroke="#22c55e" strokeWidth={2} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="text-xs text-muted-foreground">Sin datos suficientes</div>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Peso del período</CardTitle>
-              <CardDescription>
-                Ventana: {measureIntervalWeeks} semana(s)
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid grid-cols-3 gap-3">
-              <div className="p-3 border rounded-md">
-                <div className="text-xs text-muted-foreground">Inicial</div>
-                <div className="text-lg font-semibold">{periodWeight.start ?? "-"}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">{periodWeight.startDate ?? ""}</div>
-              </div>
-              <div className="p-3 border rounded-md">
-                <div className="text-xs text-muted-foreground">Actual</div>
-                <div className="text-lg font-semibold">{periodWeight.current ?? "-"}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">{periodWeight.currentDate ?? ""}</div>
-              </div>
-              <div className="p-3 border rounded-md">
-                <div className="text-xs text-muted-foreground">Cambio</div>
-                <div className={`text-lg font-semibold ${deltaClass(periodWeight.delta)}`}>
-                  {periodWeight.delta == null ? "-" : (periodWeight.delta > 0 ? `+${periodWeight.delta}` : `${periodWeight.delta}`)} kg
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Se eliminó 'Peso del período' para una interfaz más compacta */}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Calendario de controles</CardTitle>
-              <CardDescription>
-                Intervalo: {calData.weeks} semana(s)
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col gap-2">
-                <Calendar
-                  month={new Date(Date.UTC(calYear, calMonth - 1, 1))}
-                  onMonthChange={(d: Date) => { setCalYear(d.getUTCFullYear()); setCalMonth(d.getUTCMonth() + 1); }}
-                  markedDays={calData.markedDays}
-                  nextControl={calData.nextControl}
-                  captionLayout="dropdown"
-                  showOutsideDays
-                />
-                {calData.nextControl && (
-                  <div className="text-[11px] text-muted-foreground">Próximo control: <span className="font-medium">{calData.nextControl}</span></div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+          {/* Se eliminó 'Calendario de controles' temporalmente */}
 
-          {/* Resumen semanal */}
-          <Card>
+          {/* Se eliminó 'Resumen semanal' para simplificar */}
+
+          {/* Tarjeta informativa: Próximamente */}
+          <Card className="relative overflow-hidden border-none shadow-lg bg-gradient-to-br from-fuchsia-600 via-violet-600 to-indigo-600 text-white sm:col-span-2">
+            <div className="absolute inset-0 opacity-30 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.4),transparent_60%),radial-gradient(circle_at_70%_70%,rgba(255,255,255,0.25),transparent_60%)] pointer-events-none" />
             <CardHeader>
-              <CardTitle>Resumen semanal</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-white">
+                <Sparkles className="h-5 w-5" />
+                Muy pronto
+              </CardTitle>
+              <CardDescription className="text-violet-100">Subir fotos y registrar peso semanal</CardDescription>
             </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-3">
-              {weekCards.map((c) => (
-                <div key={c.title} className="p-3 border rounded-md">
-                  <div className="text-xs text-muted-foreground">{c.title}</div>
-                  <div className="text-lg font-semibold">{c.value ?? "-"}</div>
-                </div>
-              ))}
+            <CardContent className="text-sm leading-relaxed text-violet-50">
+              Estamos construyendo una experiencia enfocada en la constancia: sube tus fotos de progreso, registra tu peso semanal y obtén comparativas inteligentes. 
+              <span className="font-medium">Esta sección evolucionará</span> para darte feedback visual y métricas de composición corporal simplificadas.
             </CardContent>
           </Card>
 

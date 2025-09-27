@@ -640,14 +640,56 @@ export default function PlanPage() {
         body: JSON.stringify({ tipo: canonical, cumplido: newVal, date: selectedDate, hora: effectiveHour }),
       });
       if (!res.ok) throw new Error();
-      setCompliance((prev) => ({ ...prev, [canonical]: newVal }));
+      setCompliance((prev) => {
+      const next = { ...prev, [canonical]: newVal } as Record<string, boolean>;
+      // Persistir cumplimiento del día en localStorage como fallback para /dashboard
+      try {
+        if (typeof window !== 'undefined') {
+          const key = `plan_compliance_${selectedDate}`;
+          localStorage.setItem(key, JSON.stringify(next));
+          // Guardar también una copia "last" para fallback genérico
+          localStorage.setItem('plan_compliance_last', JSON.stringify({ date: selectedDate, map: next }));
+        }
+      } catch {}
+      return next as any;
+    });
       // Notificar a otras vistas (p. ej., /dashboard) para refrescar el resumen
       if (typeof window !== "undefined") {
-        window.dispatchEvent(new Event("meal:updated"));
+        // Emitir evento con payload mínimo para listeners opcionales
+        try {
+          const payload = { date: selectedDate };
+          window.dispatchEvent(new CustomEvent("meal:updated", { detail: payload }) as any);
+        } catch {
+          window.dispatchEvent(new Event("meal:updated"));
+        }
       }
       await saveHour(variantTipo, effectiveHour);
     } catch {
-      setError("No se pudo actualizar el cumplimiento");
+      // Fallback optimista: persistir igual en local y notificar al dashboard
+      try {
+        const canonical = canonicalTipo(tipo);
+        const newVal = !compliance[canonical];
+        setCompliance((prev) => {
+          const next = { ...prev, [canonical]: newVal } as Record<string, boolean>;
+          try {
+            if (typeof window !== 'undefined') {
+              const key = `plan_compliance_${selectedDate}`;
+              localStorage.setItem(key, JSON.stringify(next));
+              localStorage.setItem('plan_compliance_last', JSON.stringify({ date: selectedDate, map: next }));
+            }
+          } catch {}
+          return next as any;
+        });
+        if (typeof window !== 'undefined') {
+          try {
+            const payload = { date: selectedDate };
+            window.dispatchEvent(new CustomEvent("meal:updated", { detail: payload }) as any);
+          } catch {
+            window.dispatchEvent(new Event("meal:updated"));
+          }
+        }
+      } catch {}
+      setError("No se pudo actualizar el cumplimiento (modo offline aplicado)");
     } finally {
       setSaving(null);
     }
@@ -699,11 +741,12 @@ export default function PlanPage() {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Encabezado dinámico de fecha seleccionada */}
-      <div className="text-sm font-medium" data-testid="selected-date-heading">{formattedDate}</div>
       <div className="flex items-start justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold">Plan de comidas</h1>
+          <div className="mt-1 text-sm">
+            <span className="text-muted-foreground">{formattedDate}</span>
+          </div>
           <p className="text-muted-foreground mt-1">Generado por IA • Marca cumplimiento diario</p>
         </div>
         <div className="flex items-center gap-2">
@@ -749,11 +792,8 @@ export default function PlanPage() {
                   aria-pressed={isSelected}
                   aria-label={`Ver plan del ${d.abbr} ${d.num}`}
                 >
-                  <span className="font-medium">{d.abbr}</span>
+                  <span className="font-medium inline-flex items-center gap-1">{d.abbr}</span>
                   <span className="text-lg leading-none">{d.num}</span>
-                  {d.isToday && !isSelected && (
-                    <span className="absolute top-1 right-1 inline-block w-2 h-2 rounded-full bg-primary" />
-                  )}
                 </button>
               );
             })}
@@ -778,13 +818,26 @@ export default function PlanPage() {
               {showMonthPicker ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
             </button>
             {showMonthPicker && (
-              <div ref={monthPickerRef} className="absolute z-20 mt-2 bg-popover border rounded-md shadow p-2">
+              <div
+                ref={monthPickerRef}
+                /*
+                  Fix calendario desbordándose hacia la derecha en pantallas móviles / modo PWA.
+                  - right-0: alinear borde derecho con el botón "Mes" (evita overflow fuera del viewport si el botón está cerca del borde derecho).
+                  - left-auto: neutraliza left:0 implícito cuando se usa right-0.
+                  - max-w-[92vw]: asegura que nunca exceda el ancho visible.
+                  - w-max & shrink-0: mantiene ancho natural del calendario dentro del límite.
+                  - [--cell-size:...] tamaños de celda reducidos en móviles para compactar.
+                  - overscroll-contain: evita que gestos dentro del calendario generen scroll lateral en el body.
+                */
+                className="absolute z-20 mt-2 right-0 left-auto bg-popover border rounded-md shadow p-2 w-max max-w-[92vw] overscroll-contain [--cell-size:2.1rem] sm:[--cell-size:2.4rem]"
+              >
                 <Calendar
                   mode="single"
                   selected={selectedDateObj}
                   onSelect={onSelectFromCalendar}
                   month={displayMonth}
                   onMonthChange={(m) => setDisplayMonth(m)}
+                  className="[--cell-size:inherit]"
                 />
               </div>
             )}
@@ -804,8 +857,19 @@ export default function PlanPage() {
         <CardHeader>
           <CardTitle>Plan diario</CardTitle>
           <CardDescription>
-            <span className="font-medium">{formattedDate}</span>
-            <span className="ml-2 text-muted-foreground">• Comidas y estado</span>
+            {selectedDate === todayStr ? (
+              <>
+                <span className="font-medium">Hoy</span>
+                <span className="mx-2">•</span>
+                <span className="font-medium">{formattedDate}</span>
+                <span className="ml-2 text-muted-foreground">• Comidas y estado</span>
+              </>
+            ) : (
+              <>
+                <span className="font-medium">{formattedDate}</span>
+                <span className="ml-2 text-muted-foreground">• Comidas y estado</span>
+              </>
+            )}
           </CardDescription>
           {selectedWeekdayMeals.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">

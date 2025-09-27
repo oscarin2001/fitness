@@ -8,8 +8,11 @@ import {
   NavigationMenuItem,
   NavigationMenuLink,
 } from "@/components/ui/navigation-menu";
-import { CheckCircle2, CircleDashed, Gauge, Home, UtensilsCrossed, LogOut, User, Menu, Activity } from "lucide-react";
+import { CheckCircle2, CircleDashed, Gauge, Home, UtensilsCrossed, LogOut, User, Menu, Activity, Settings } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 type Summary = {
   objetivos: { kcal: number | null; proteinas: number | null; grasas: number | null; carbohidratos: number | null; agua_litros: number | null };
@@ -21,6 +24,7 @@ export default function AppNavbar() {
   const [mounted, setMounted] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [avatarText, setAvatarText] = useState<string>("N");
+  const [logoutOpen, setLogoutOpen] = useState(false);
 
   useEffect(() => {
     let abort = false;
@@ -108,23 +112,20 @@ export default function AppNavbar() {
             <NavigationMenuItem>
               <NavigationMenuLink asChild className="px-3 py-2 flex items-center gap-2">
                 <Link href="/dashboard/progress">
-                  <Activity className="h-4 w-4" /> Progreso
+                  <Activity className="h-4 w-4" />
+                  <span className="inline-flex items-center gap-1">Progreso <span className="text-[10px] px-1 rounded bg-amber-100 text-amber-700 border border-amber-200">Beta</span></span>
                 </Link>
               </NavigationMenuLink>
             </NavigationMenuItem>
             <NavigationMenuItem>
-              <NavigationMenuLink asChild className="px-3 py-2 flex items-center gap-2">
-                <Link href="/dashboard/insights">
-                  <Gauge className="h-4 w-4" /> Insights
-                </Link>
-              </NavigationMenuLink>
-            </NavigationMenuItem>
-            <NavigationMenuItem>
-              <NavigationMenuLink asChild className="px-3 py-2 flex items-center gap-2">
-                <Link href="/dashboard/checklist">
-                  <CheckCircle2 className="h-4 w-4" /> Checklist
-                </Link>
-              </NavigationMenuLink>
+              <a
+                href="/dashboard/checklist"
+                className="px-3 py-2 flex items-center gap-2 cursor-pointer"
+                onClick={(e) => { e.preventDefault(); toast.info("La sección Checklist está en mantenimiento (beta)"); }}
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                <span className="inline-flex items-center gap-1">Checklist <span className="text-[10px] px-1 rounded bg-amber-100 text-amber-700 border border-amber-200">Beta</span></span>
+              </a>
             </NavigationMenuItem>
           </NavigationMenuList>
         </NavigationMenu>
@@ -149,22 +150,21 @@ export default function AppNavbar() {
                   {avatarText}
                 </div>
               </summary>
-              <div className="absolute right-0 mt-2 w-48 rounded-md border bg-popover p-1 shadow-md">
+              <div className="absolute right-0 mt-2 w-52 rounded-md border bg-popover p-1 shadow-md">
                 <button
-                  onClick={() => router.push("/account/settings")}
+                  onClick={() => router.push("/account/profile/personal")}
                   className="w-full flex items-center gap-2 px-2 py-2 text-sm rounded hover:bg-accent"
                 >
                   <User className="h-4 w-4" /> Perfil
                 </button>
                 <button
-                  onClick={async () => {
-                    const ok = window.confirm("¿Deseas cerrar sesión?");
-                    if (!ok) return;
-                    try {
-                      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
-                    } catch {}
-                    router.push("/auth/login");
-                  }}
+                  onClick={() => router.push("/account/settings")}
+                  className="w-full flex items-center gap-2 px-2 py-2 text-sm rounded hover:bg-accent"
+                >
+                  <Settings className="h-4 w-4" /> Configuraciones
+                </button>
+                <button
+                  onClick={() => setLogoutOpen(true)}
                   className="w-full flex items-center gap-2 px-2 py-2 text-sm rounded hover:bg-accent text-red-600"
                 >
                   <LogOut className="h-4 w-4" /> Cerrar sesión
@@ -180,13 +180,38 @@ export default function AppNavbar() {
             <nav className="flex flex-col">
               <Link className="px-3 py-2 rounded hover:bg-accent" href="/dashboard" onClick={() => setMobileOpen(false)}><span className="inline-flex items-center gap-2"><Home className="h-4 w-4" /> Dashboard</span></Link>
               <Link className="px-3 py-2 rounded hover:bg-accent" href="/dashboard/plan" onClick={() => setMobileOpen(false)}><span className="inline-flex items-center gap-2"><UtensilsCrossed className="h-4 w-4" /> Plan</span></Link>
-              <Link className="px-3 py-2 rounded hover:bg-accent" href="/dashboard/progress" onClick={() => setMobileOpen(false)}><span className="inline-flex items-center gap-2"><Activity className="h-4 w-4" /> Progreso</span></Link>
-              <Link className="px-3 py-2 rounded hover:bg-accent" href="/dashboard/insights" onClick={() => setMobileOpen(false)}><span className="inline-flex items-center gap-2"><Gauge className="h-4 w-4" /> Insights</span></Link>
-              <Link className="px-3 py-2 rounded hover:bg-accent" href="/dashboard/checklist" onClick={() => setMobileOpen(false)}><span className="inline-flex items-center gap-2"><CheckCircle2 className="h-4 w-4" /> Checklist</span></Link>
+              <Link className="px-3 py-2 rounded hover:bg-accent" href="/dashboard/progress" onClick={() => setMobileOpen(false)}><span className="inline-flex items-center gap-2"><Activity className="h-4 w-4" /> Progreso <span className="text-[10px] px-1 rounded bg-amber-100 text-amber-700 border border-amber-200">Beta</span></span></Link>
+              <a className="px-3 py-2 rounded hover:bg-accent cursor-pointer" href="/dashboard/checklist" onClick={(e) => { e.preventDefault(); setMobileOpen(false); toast.info("La sección Checklist está en mantenimiento (beta)"); }}><span className="inline-flex items-center gap-2"><CheckCircle2 className="h-4 w-4" /> Checklist <span className="text-[10px] px-1 rounded bg-amber-100 text-amber-700 border border-amber-200">Beta</span></span></a>
             </nav>
           </div>
         )}
-      </div>
+
+      {/* Modal de cierre de sesión */}
+      <Dialog open={logoutOpen} onOpenChange={setLogoutOpen}>
+        <DialogContent className="p-4 max-w-xs sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">¿Cerrar sesión?</DialogTitle>
+            <DialogDescription className="text-xs">Se cerrará tu sesión actual. Podrás iniciar sesión nuevamente cuando quieras.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:justify-end">
+            <Button size="sm" variant="outline" onClick={() => setLogoutOpen(false)}>Cancelar</Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={async () => {
+                try {
+                  await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+                } catch {}
+                setLogoutOpen(false);
+                router.push("/auth/login");
+              }}
+            >
+              Cerrar sesión
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  </div>
   );
 }

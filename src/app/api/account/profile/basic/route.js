@@ -1,28 +1,10 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
-import jwt from "jsonwebtoken";
-
-function getCookieName() {
-  return process.env.NODE_ENV === "production"
-    ? "__Secure-authjs.session-token"
-    : "authjs.session-token";
-}
-
-async function getUserIdFromRequest(request) {
-  try {
-    const cookieName = getCookieName();
-    const token = request.cookies.get(cookieName)?.value;
-    if (!token) return null;
-    const payload = jwt.verify(token, process.env.AUTH_SECRET);
-    return payload?.userId || payload?.sub || null;
-  } catch {
-    return null;
-  }
-}
+import { resolveUserId } from "@/lib/auth/resolveUserId";
 
 export async function GET(request) {
   try {
-    const userIdRaw = await getUserIdFromRequest(request);
+  const userIdRaw = await resolveUserId(request);
     const userId = Number(userIdRaw);
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 

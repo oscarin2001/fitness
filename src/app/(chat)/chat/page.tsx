@@ -5,7 +5,10 @@ import { useState } from 'react'
 
 export default function Chat() {
   const [input, setInput] = useState('')
-  const { messages, sendMessage, isLoading } = useChat({ api: '/api/chat' })
+  // useChat default endpoint (configured by library); remove deprecated 'api' option
+  const { messages, sendMessage } = useChat()
+  // Derivar estado de envío: si el último mensaje de usuario no tiene aún respuesta del asistente
+  const isSending = messages.length > 0 && messages[messages.length - 1].role === 'user'
 
   return (
     <div className="flex flex-col w-full max-w-md py-24 mx-auto stretch">
@@ -26,7 +29,7 @@ export default function Chat() {
       <form
         onSubmit={(e) => {
           e.preventDefault()
-          if (!input.trim() || isLoading) return
+          if (!input.trim() || isSending) return
           sendMessage({ text: input })
           setInput('')
         }}
@@ -36,7 +39,7 @@ export default function Chat() {
           value={input}
           placeholder="Say something..."
           onChange={(e) => setInput(e.currentTarget.value)}
-          disabled={isLoading}
+          disabled={isSending}
         />
       </form>
     </div>

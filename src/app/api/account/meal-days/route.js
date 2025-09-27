@@ -1,10 +1,35 @@
 import prisma from "@/lib/db/prisma";
 import jwt from "jsonwebtoken";
+import { getToken } from "next-auth/jwt";
 
 function getCookieName() {
   return process.env.NODE_ENV === "production"
     ? "__Secure-authjs.session-token"
     : "authjs.session-token";
+}
+
+async function resolveUserId(req) {
+  const secret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
+  if (secret) {
+    try {
+      const nt = await getToken({ req, secret });
+      if (nt?.email) {
+        const auth = await prisma.auth.findUnique({ where: { email: nt.email.toLowerCase() } });
+        if (auth?.usuarioId) return auth.usuarioId;
+      }
+    } catch {}
+  }
+  try {
+    const primary = getCookieName();
+    const sessionToken = req.cookies?.get(primary)?.value || req.cookies?.get("authjs.session-token")?.value;
+    if (!sessionToken) return null;
+    if (!process.env.AUTH_SECRET) return null;
+    const decoded = jwt.verify(sessionToken, process.env.AUTH_SECRET);
+    const userId = parseInt(decoded.sub, 10);
+    return Number.isInteger(userId) ? userId : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(req) {
@@ -19,31 +44,11 @@ export async function POST(req) {
     }
 
 
-  // Obtener cookie (soporta nombre secure en prod)
-  const primary = getCookieName();
-  const sessionToken = req.cookies?.get(primary)?.value || req.cookies?.get("authjs.session-token")?.value;
-
-    if (!sessionToken) {
-      console.error("Token de sesión no encontrado en las cookies.");
+    const userId = await resolveUserId(req);
+    if (!userId) {
+      console.error("Usuario no autenticado (sin token válido).");
       return new Response(
         JSON.stringify({ error: "Usuario no autenticado." }),
-        { status: 401, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-  let userId;
-
-    try {
-      const decoded = jwt.verify(sessionToken, process.env.AUTH_SECRET);
-      userId = parseInt(decoded.sub, 10);
-      if (!Number.isInteger(userId)) {
-        throw new Error("ID de usuario inválido en token");
-      }
-      // console.log("Token decodificado correctamente:", decoded);
-    } catch (error) {
-      console.error("Error al verificar el token:", error);
-      return new Response(
-        JSON.stringify({ error: "Token inválido o expirado." }),
         { status: 401, headers: { "Content-Type": "application/json" } }
       );
     }

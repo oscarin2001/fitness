@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, memo } from "react";
+import { useEffect, useState, useCallback, useRef, memo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
@@ -145,7 +145,7 @@ const Group = memo(function Group({ title, kind, items, extra, selected, input, 
   );
 });
 
-export default function OnboardingFoodsPage() {
+function FoodsInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
@@ -408,8 +408,11 @@ export default function OnboardingFoodsPage() {
 
     const normalize = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
 
-    const apiCat = mapKindToCat[kind];
-    const localItems: string[] = catalog?.categories?.[apiCat] || [];
+  const apiCat = mapKindToCat[kind];
+  // Asegurar tipado seguro: categories es un objeto con claves conocidas, pero al indexar dinámicamente
+  // TypeScript necesita una firma de índice. Normalizamos a Record<string,string[]> en runtime.
+  const categories: Record<string,string[]> | undefined = catalog?.categories as any;
+  const localItems: string[] = categories?.[apiCat] || [];
 
     // Construir universo permitido: locales + resultados globales de búsqueda (si existen)
     const globalCandidateSets: string[][] = [];
@@ -595,5 +598,13 @@ export default function OnboardingFoodsPage() {
         </div>
       </div>
     </OnboardingLayout>
+  );
+}
+
+export default function OnboardingFoodsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm">Cargando catálogo…</div>}>
+      <FoodsInner />
+    </Suspense>
   );
 }

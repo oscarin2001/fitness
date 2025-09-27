@@ -1,29 +1,10 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
-import jwt from "jsonwebtoken";
-
-function getCookieName() {
-  return process.env.NODE_ENV === "production"
-    ? "__Secure-authjs.session-token"
-    : "authjs.session-token";
-}
-
-async function getUserIdFromRequest(request) {
-  try {
-    const cookieName = getCookieName();
-    const token = request.cookies.get(cookieName)?.value;
-    const secret = process.env.AUTH_SECRET;
-    if (!token || !secret) return null;
-    const decoded = jwt.verify(token, secret);
-    return parseInt(decoded.sub, 10);
-  } catch {
-    return null;
-  }
-}
+import { resolveUserId } from "@/lib/auth/resolveUserId";
 
 export async function POST(request) {
   try {
-    const userId = await getUserIdFromRequest(request);
+  const userId = await resolveUserId(request);
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
     // Alimentos permitidos del usuario
@@ -52,16 +33,18 @@ export async function POST(request) {
 
     // Construir lista de comidas a generar respetando preferencias
     // Orden sugerido: Desayuno, Snack_manana, Almuerzo, Snack_tarde, Cena
+    // Construcción segura: solo valores permitidos por el enum Prisma (Desayuno, Almuerzo, Cena, Snack)
+    // Unificamos cualquier variante de snack (mañana/tarde) en un único 'Snack' porque el modelo PlanComida
+    // solo soporta una fila por comida_tipo (unique(usuarioId, comida_tipo)).
     let MEALS = [];
     if (enabledMeals) {
-      const map = [
-        enabledMeals.desayuno ? "Desayuno" : null,
-        enabledMeals.snack_manana || enabledMeals["snack_mañana"] ? "Snack_manana" : null,
-        enabledMeals.almuerzo ? "Almuerzo" : null,
-        enabledMeals.snack_tarde ? "Snack_tarde" : null,
-        enabledMeals.cena ? "Cena" : null,
-      ].filter(Boolean);
-      MEALS = map.length ? map : ["Desayuno", "Almuerzo", "Cena", "Snack"];
+      const desayuno = enabledMeals.desayuno ? ["Desayuno"] : [];
+      const almuerzo = enabledMeals.almuerzo ? ["Almuerzo"] : [];
+      const cena = enabledMeals.cena ? ["Cena"] : [];
+      const anySnack = enabledMeals.snack || enabledMeals.snack_manana || enabledMeals["snack_mañana"] || enabledMeals.snack_tarde;
+      const snack = anySnack ? ["Snack"] : [];
+      MEALS = [...desayuno, ...almuerzo, ...cena, ...snack];
+      if (!MEALS.length) MEALS = ["Desayuno", "Almuerzo", "Cena", "Snack"]; // fallback
     } else {
       MEALS = ["Desayuno", "Almuerzo", "Cena", "Snack"];
     }
@@ -77,9 +60,8 @@ export async function POST(request) {
     } catch {}
 
     for (const tipo of MEALS) {
-      // Buscar recetas candidatas por tipo
-      // Soporte variantes de Snack: si el tipo incluye "Snack", aceptar recetas con tipo IN [tipo, "Snack"]
-      const tipoQuery = /snack/i.test(String(tipo)) ? { in: [String(tipo), "Snack"] } : String(tipo);
+      // Para Snack usamos directamente el enum 'Snack'
+      const tipoQuery = String(tipo); // siempre uno de los válidos ahora
       const recetas = await prisma.receta.findMany({
         where: { tipo: tipoQuery, alimentos: { some: { alimentoId: { in: allowedIds } } } },
         include: { alimentos: { include: { alimento: true } } },
@@ -112,9 +94,9 @@ export async function POST(request) {
         : null;
 
       const up = await prisma.planComida.upsert({
-        where: { usuarioId_comida_tipo: { usuarioId: userId, comida_tipo: String(tipo) } },
+        where: { usuarioId_comida_tipo: { usuarioId: userId, comida_tipo: tipoQuery } },
         update: { recetaId: best.id, porciones: 1, overrides: baseOverrides },
-        create: { usuarioId: userId, comida_tipo: String(tipo), recetaId: best.id, porciones: 1, overrides: baseOverrides },
+        create: { usuarioId: userId, comida_tipo: tipoQuery, recetaId: best.id, porciones: 1, overrides: baseOverrides },
         include: { receta: { include: { alimentos: { include: { alimento: true } } } } },
       });
 
@@ -124,6 +106,7 @@ export async function POST(request) {
     if (!results.length) return NextResponse.json({ error: "No se encontraron recetas compatibles con tus alimentos" }, { status: 404 });
     return NextResponse.json({ ok: true, items: results });
   } catch (e) {
+    console.error("[meal-plan][auto-generate] error", e);
     return NextResponse.json({ error: "Error del servidor" }, { status: 500 });
   }
 }

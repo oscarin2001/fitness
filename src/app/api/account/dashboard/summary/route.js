@@ -1,29 +1,54 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
-import jwt from "jsonwebtoken";
+import { getToken } from "next-auth/jwt";
+import jwt from "jsonwebtoken"; // legacy fallback
 
-function getCookieName() {
-  return process.env.NODE_ENV === "production"
-    ? "__Secure-authjs.session-token"
-    : "authjs.session-token";
-}
-
-async function getUserIdFromRequest(request) {
+// Unified user resolution (NextAuth JWT primary, legacy cookie fallback)
+async function resolveUserId(req) {
+  // 1) Try NextAuth token
   try {
-    const cookieName = getCookieName();
-    const token = request.cookies.get(cookieName)?.value;
+    const token = await getToken({ req });
+    if (token) {
+      if (token.userId != null) {
+        const n = Number(token.userId);
+        if (Number.isFinite(n)) return n;
+      }
+      const raw = token.id || token.sub;
+      if (raw && String(raw).length > 15 && token.email) {
+        try {
+          const auth = await prisma.auth.findUnique({ where: { email: String(token.email).toLowerCase() }, select: { usuarioId: true } });
+          if (auth?.usuarioId) return auth.usuarioId;
+        } catch {}
+      } else if (raw) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  } catch {}
+
+  // 2) Legacy cookie fallback
+  try {
+    const cookieName = process.env.NODE_ENV === 'production' ? '__Secure-authjs.session-token' : 'authjs.session-token';
+    const raw = req.cookies.get(cookieName)?.value;
     const secret = process.env.AUTH_SECRET;
-    if (!token || !secret) return null;
-    const decoded = jwt.verify(token, secret);
-    return parseInt(decoded.sub, 10);
-  } catch {
-    return null;
-  }
+    if (!raw || !secret) return null;
+    const decoded = jwt.verify(raw, secret);
+    let val = decoded?.userId ?? decoded?.sub;
+    if (val && String(val).length > 15 && decoded?.email) {
+      try {
+        const auth = await prisma.auth.findUnique({ where: { email: String(decoded.email).toLowerCase() }, select: { usuarioId: true } });
+        if (auth?.usuarioId) return auth.usuarioId;
+      } catch {}
+    }
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  } catch {}
+  return null;
 }
 
 export async function GET(request) {
   try {
-    const userId = await getUserIdFromRequest(request);
+  const userId = await resolveUserId(request);
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
     const now = new Date();
@@ -221,7 +246,7 @@ export async function GET(request) {
       },
     });
   } catch (e) {
-    console.error("/api/account/dashboard/summary error", e);
+    try { console.error("/api/account/dashboard/summary error", e); } catch {}
     return NextResponse.json({ error: "Error del servidor" }, { status: 500 });
   }
 }

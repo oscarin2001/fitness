@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { FcGoogle } from 'react-icons/fc';
+import { signIn } from 'next-auth/react';
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff } from "lucide-react";
@@ -141,6 +143,24 @@ export default function LoginPage() {
 
         <Button type="submit" className="w-full" disabled={loading}>
           {loading ? "Ingresando..." : "Ingresar"}
+        </Button>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center" aria-hidden="true">
+            <span className="w-full border-t" />
+          </div>
+          <div className="relative flex justify-center text-xs uppercase">
+            <span className="bg-white px-2 text-muted-foreground">o continúa con</span>
+          </div>
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full flex items-center gap-2"
+          onClick={() => signIn('google', { callbackUrl: '/onboarding' })}
+        >
+          <FcGoogle className="h-5 w-5" /> Google
         </Button>
 
         <div className="mt-2 text-center text-sm">

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
 import jwt from "jsonwebtoken";
+import { getToken } from "next-auth/jwt";
 
 function getCookieName() {
   return process.env.NODE_ENV === "production"
@@ -9,10 +10,20 @@ function getCookieName() {
 }
 
 async function getUserIdFromRequest(request) {
+  const secret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
+  if (secret) {
+    try {
+      const nt = await getToken({ req: request, secret });
+      if (nt?.email) {
+        const auth = await prisma.auth.findUnique({ where: { email: nt.email.toLowerCase() } });
+        if (auth?.usuarioId) return auth.usuarioId;
+      }
+    } catch {}
+  }
   try {
     const cookieName = getCookieName();
     const token = request.cookies.get(cookieName)?.value;
-    if (!token) return null;
+    if (!token || !process.env.AUTH_SECRET) return null;
     const payload = jwt.verify(token, process.env.AUTH_SECRET);
     return payload?.userId || payload?.sub || null;
   } catch {

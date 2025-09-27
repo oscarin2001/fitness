@@ -1,10 +1,17 @@
 # Node / Next.js
 node_modules/
 .next/
+.next-turbo/
 .out/
 .vercel/
+.turbo/
 
 
+
+# Env
+.env
+.env.local
+.env.*.local
 
 # Logs
 npm-debug.log*
@@ -27,8 +34,11 @@ prisma/*.db-journal
 # Build artifacts
 coverage/
 dist/
+*.tsbuildinfo
+
+# Caches
+.cache/
+*.cache
 
 # Misc
 *.local
-*.cache
-.cache/

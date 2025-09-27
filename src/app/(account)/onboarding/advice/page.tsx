@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -273,6 +274,7 @@ function renderAdviceToPlain(markdown: string): string {
 
 export default function OnboardingAdvicePage() {
   const router = useRouter();
+  const { update } = useSession();
   // Nuevo: detectar si debe invalidar cache (siempre que se entra a esta página forzamos regeneración limpia)
   const [forceInvalidate] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -303,6 +305,8 @@ export default function OnboardingAdvicePage() {
   const startRef = useRef<number | null>(null);
   const expectedRef = useRef<number>(20000); // ms estimados
   const intervalRef = useRef<any>(null);
+  // Evitar doble envío al finalizar
+  const [finishing, setFinishing] = useState(false);
   // Modo estricto activado en onboarding para evitar fallbacks
   // strictMode: antes estaba forzado a true, lo relajamos a false para permitir mostrar fallback IA en lugar de dejar la tarjeta vacía.
   const strictMode = false;
@@ -1048,10 +1052,13 @@ export default function OnboardingAdvicePage() {
   }
 
   async function next() {
+    if (finishing) return; // Guardar contra doble click
+    setFinishing(true);
     try {
       // Bloquear si no hay plan generado aún
       if (!ephemeralWeekly && !(weekly?.weekly && Array.isArray(weekly.weekly) && weekly.weekly.length)) {
         toast.error("Primero genera el plan semanal (espera a que termine la IA)");
+        setFinishing(false);
         return;
       }
       // Guardar plan inicial SOLO ahora (al finalizar) usando las comidas generadas por la IA (mealItems)
@@ -1168,6 +1175,7 @@ export default function OnboardingAdvicePage() {
       if (done.status === 401) {
         toast.error("Sesión expirada. Inicia sesión nuevamente.");
         router.replace("/auth/login");
+        setFinishing(false);
         return;
       }
       if (!done.ok) throw new Error();
@@ -1177,19 +1185,25 @@ export default function OnboardingAdvicePage() {
         document.cookie = `first_login=false; Path=/; Max-Age=${60 * 60 * 24 * 30}; SameSite=Lax`;
         document.cookie = `onboarded=true; Path=/; Max-Age=${60 * 60 * 24 * 30}; SameSite=Lax`;
       } catch {}
+      // Intentar refrescar el JWT de NextAuth para que onboarding_completed=true sin esperar nueva navegación
+      try { await update?.({ onboarding_completed: true }); } catch {}
       // Ir al dashboard
       window.location.replace("/dashboard");
     } catch {
       toast.error("No se pudo finalizar el onboarding");
+      setFinishing(false);
     }
   }
 
   async function skip() {
+    if (finishing) return;
+    setFinishing(true);
     try {
       const done = await fetch("/api/auth/onboarding/complete", { method: "POST", cache: "no-store", credentials: "include" });
       if (done.status === 401) {
         toast.error("Sesión expirada. Inicia sesión nuevamente.");
         router.replace("/auth/login");
+        setFinishing(false);
         return;
       }
       if (!done.ok) throw new Error();
@@ -1197,9 +1211,11 @@ export default function OnboardingAdvicePage() {
         document.cookie = `first_login=false; Path=/; Max-Age=${60 * 60 * 24 * 30}; SameSite=Lax`;
         document.cookie = `onboarded=true; Path=/; Max-Age=${60 * 60 * 24 * 30}; SameSite=Lax`;
       } catch {}
+      try { await update?.({ onboarding_completed: true }); } catch {}
       window.location.replace("/dashboard");
     } catch {
       toast.error("No se pudo finalizar el onboarding");
+      setFinishing(false);
     }
   }
 
