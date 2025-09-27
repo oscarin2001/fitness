@@ -11,6 +11,8 @@
   "dependencies": {
     "@ai-sdk/google": "^2.0.8",
     "@ai-sdk/react": "^2.0.21",
+    "@libsql/client": "^0.15.15",
+    "@prisma/adapter-libsql": "^6.16.2",
     "@prisma/client": "^6.14.0",
     "@radix-ui/react-checkbox": "^1.3.3",
     "@radix-ui/react-dialog": "^1.1.15",
