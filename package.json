@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "db:clean": "node scripts/clean-db.mjs"
+    "db:clean": "node scripts/clean-db.mjs",
+    "db:migrate:turso": "node scripts/apply-turso-migrations.mjs",
+    "db:wipe:local": "powershell -Command \"Remove-Item prisma/dev.db -Force -ErrorAction SilentlyContinue; npx prisma migrate deploy\""
   },
   "dependencies": {
     "@ai-sdk/google": "^2.0.8",
