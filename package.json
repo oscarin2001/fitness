@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-  "prisma:prepare": "prisma generate && prisma migrate deploy",
+  "prisma:prepare": "node scripts/prisma-prepare.mjs",
   "build": "npm run prisma:prepare && next build",
     "start": "next start",
     "lint": "next lint",
