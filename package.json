@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build",
+  "prisma:prepare": "prisma generate && prisma migrate deploy",
+  "build": "npm run prisma:prepare && next build",
     "start": "next start",
     "lint": "next lint",
     "db:clean": "node scripts/clean-db.mjs",
