@@ -273,6 +273,8 @@ function renderAdviceToPlain(markdown: string): string {
 
 export default function OnboardingAdvicePage() {
   const router = useRouter();
+  // Nuevo: detectar si debe invalidar cache (siempre que se entra a esta página forzamos regeneración limpia)
+  const [forceInvalidate] = useState(true);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState<string>("");
   const [summary, setSummary] = useState<any | null>(null);
@@ -302,7 +304,8 @@ export default function OnboardingAdvicePage() {
   const expectedRef = useRef<number>(20000); // ms estimados
   const intervalRef = useRef<any>(null);
   // Modo estricto activado en onboarding para evitar fallbacks
-  const strictMode = true;
+  // strictMode: antes estaba forzado a true, lo relajamos a false para permitir mostrar fallback IA en lugar de dejar la tarjeta vacía.
+  const strictMode = false;
   // Construir URL del endpoint con flags + propagación de params de la página
   function buildAdviceUrl() {
     try {
@@ -318,6 +321,30 @@ export default function OnboardingAdvicePage() {
       return base.pathname + (base.search ? base.search : '');
     } catch {
       return '/api/account/advice';
+    }
+  }
+  // Agregar helper para limpiar estado local y remoto
+  async function resetAdviceState(options: { navigateBack?: boolean } = {}) {
+    try {
+      // Limpiar localStorage flags
+      try { localStorage.removeItem('advice_last_ms'); } catch {}
+      try { localStorage.removeItem('advice_show_full'); } catch {}
+    } catch {}
+    // Limpiar estado react
+    setError(null);
+    setText("");
+    setSummary(null);
+    setMealItems(null);
+    setMealVariants(null);
+    setHydrationLiters(null);
+    setRawBeverages(null);
+    setBeverages(null);
+    setProgress(0);
+    setEtaSec(null);
+    // Invalidar cache servidor
+    try { await fetch('/api/account/advice?invalidate=1', { method: 'POST' }); } catch {}
+    if (options.navigateBack) {
+      router.push('/onboarding/review');
     }
   }
   // Construir vista previa efímera a partir de mealItems (AI) si no hay weekly.weekly o para reemplazar cualquier plan previo guardado.
@@ -664,12 +691,9 @@ export default function OnboardingAdvicePage() {
         const res = await fetch(buildAdviceUrl(), { method: "POST" });
         const json = await res.json().catch(() => ({}));
         if (res.status === 422) {
-          // Modo estricto: salida incompleta -> mostrar error claro
-          setError(json?.error || 'La IA no devolvió todos los bloques requeridos. Intenta nuevamente.');
-          setLoading(false);
-          setProgress(100);
-          setEtaSec(0);
-          return;
+          // Mostrar igualmente cualquier contenido parcial si lo hubiera
+          setError(json?.error || 'Salida incompleta. Puedes reintentar para versión completa.');
+          // no retornamos aún, intentamos extraer lo posible (continuará flujo)
         }
         // Caso: generación todavía en curso (202 started/pending desde prefetch)
         if (res.status === 202 && (json?.started || json?.pending)) {
@@ -683,12 +707,8 @@ export default function OnboardingAdvicePage() {
                 if (r2.ok && !j2.started && !j2.pending) {
                   // completado
                   if (!cancelled) {
-                    if (strictMode && j2.fallback) {
-                      setError('El modelo devolvió fallback y el modo estricto está activado. Intenta nuevamente.');
-                      setLoading(false);
-                      setProgress(100);
-                      setEtaSec(0);
-                      return;
+                    if (j2.fallback) {
+                      setError('Contenido parcial (fallback). Puedes reintentar para enriquecerlo.');
                     }
                     setText(j2.advice || "");
                     setSummary(j2.summary ?? null);
@@ -733,12 +753,8 @@ export default function OnboardingAdvicePage() {
           throw new Error(json?.error || "AI error");
         }
         if (!cancelled) {
-          if (strictMode && json.fallback) {
-            setError('El modelo devolvió fallback y el modo estricto está activado. Intenta nuevamente.');
-            setLoading(false);
-            setProgress(100);
-            setEtaSec(0);
-            return;
+          if (json.fallback) {
+            setError('Contenido parcial (fallback). Puedes reintentar para versión más completa.');
           }
           setText(json.advice || "");
           setSummary(json.summary ?? null);
@@ -837,9 +853,13 @@ export default function OnboardingAdvicePage() {
       try {
         const res = await fetch(buildAdviceUrl(), { method: "POST" });
         const json = await res.json().catch(() => ({}));
-        if (res.status === 422) throw new Error(json?.error || 'Salida incompleta (modo estricto)');
+        if (res.status === 422) {
+          setError(json?.error || 'Salida incompleta. Puedes reintentar.');
+        }
         if (!res.ok) throw new Error(json?.error || 'AI error');
-        if (strictMode && json.fallback) throw new Error('El modelo devolvió fallback (modo estricto)');
+        if (json.fallback) {
+          setError('Contenido parcial (fallback). Puedes reintentar.');
+        }
         setText(json.advice || "");
         setSummary(json.summary ?? null);
         const items = json.meals?.items;
@@ -861,114 +881,54 @@ export default function OnboardingAdvicePage() {
     })();
   }
 
-  // Procesamiento de bebidas: deduplicar (mismo nombre + momento) sumando ml y limitando a 250; distribuir las de momento "General".
+  // Procesamiento de bebidas: deduplicar y limitar a 2 bebidas finales, distribuir 'General'.
   useEffect(() => {
     if (!rawBeverages || !Array.isArray(rawBeverages) || rawBeverages.length === 0) {
       setBeverages(null);
       return;
     }
-
-    // Normalizar claves (sin tildes, minúsculas, trim)
-    const norm = (s: string) => s
-      .normalize('NFD')
-      .replace(/\p{Diacritic}/gu, '')
-      .toLowerCase()
-      .trim();
-
-    // Detectar comidas habilitadas para ordenar momentos
+    const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
     let enabledMeals: any = null;
     try {
       const rawPref = profile?.preferencias_alimentos;
       const pref = rawPref ? (typeof rawPref === 'string' ? JSON.parse(rawPref) : rawPref) : null;
       enabledMeals = pref?.enabledMeals || null;
     } catch {}
-    const snackManana = enabledMeals?.snack_manana || enabledMeals?.["snack_mañana"] || false;
+    const snackManana = enabledMeals?.snack_manana || enabledMeals?.['snack_mañana'] || false;
     const snackTarde = enabledMeals?.snack_tarde || false;
-
-    // Orden base de momentos
     const baseOrder: string[] = ['Desayuno'];
     if (snackManana) baseOrder.push('Snack mañana');
     baseOrder.push('Almuerzo');
     if (snackTarde) baseOrder.push('Snack tarde');
     baseOrder.push('Cena');
-
-    // Si hay schedule, usar sus claves para priorizar el orden real horario
     let scheduleOrder: string[] = [];
     if (schedule && typeof schedule === 'object') {
       scheduleOrder = Object.keys(schedule)
-        .filter(k => typeof schedule[k] === 'string')
-        .sort((a,b) => {
-          const ta = (schedule as any)[a];
-          const tb = (schedule as any)[b];
-          return String(ta).localeCompare(String(tb));
-        });
+        .filter(k => typeof (schedule as any)[k] === 'string')
+        .sort((a,b) => String((schedule as any)[a]).localeCompare(String((schedule as any)[b])));
     }
     const momentOrder = scheduleOrder.length ? scheduleOrder : baseOrder;
-
-    // 1) Clonar y normalizar entradas iniciales
-    const cloned = rawBeverages.map(b => ({
-        nombre: (b?.nombre || b?.name || 'Bebida').toString().trim(),
-        ml: Math.min(250, Math.max(0, Number(b?.ml) || 0)),
-        momento: (b?.momento || b?.moment || '').toString().trim()
-      }))
-      // Filtrar agua directa (no mostrarla ni contabilizarla)
+    const cloned = rawBeverages
+      .map(b => ({ nombre: (b?.nombre || b?.name || 'Bebida').toString().trim(), ml: Math.min(250, Math.max(0, Number(b?.ml) || 0)), momento: (b?.momento || b?.moment || '').toString().trim() }))
       .filter(b => b.ml > 0 && !/^agua(\b|\s|$)/i.test(b.nombre));
-
-    // 2) Separar las generales
-    const general: any[] = [];
-    const withMoment: any[] = [];
-    cloned.forEach(b => {
-      if (!b.momento || /^general$/i.test(b.momento)) general.push(b); else withMoment.push(b);
-    });
-
-    // 3) Distribuir bebidas "General" cíclicamente entre los momentos conocidos
-    if (general.length && momentOrder.length) {
-      general.forEach((b, idx) => {
-        b.momento = momentOrder[idx % momentOrder.length];
-      });
-    }
-
-    // 4) Unir listas
+    const general: any[] = []; const withMoment: any[] = [];
+    cloned.forEach(b => { if (!b.momento || /^general$/i.test(b.momento)) general.push(b); else withMoment.push(b); });
+    if (general.length && momentOrder.length) general.forEach((b, idx) => { b.momento = momentOrder[idx % momentOrder.length]; });
     const all = [...withMoment, ...general];
-
-    // 5) Deduplicar (nombre + momento) sumando ml y limitando a 250 ml totales
-    const map = new Map<string, { nombre: string; momento: string; ml: number }>();
+    const map = new Map<string,{nombre:string; momento:string; ml:number}>();
     for (const b of all) {
-      const key = norm(b.nombre) + '|' + norm(b.momento || 'General');
+      const key = norm(b.nombre)+'|'+norm(b.momento||'General');
       const prev = map.get(key);
-      if (prev) {
-        prev.ml = Math.min(250, prev.ml + b.ml);
-      } else {
-        map.set(key, { nombre: b.nombre, momento: b.momento || 'General', ml: Math.min(250, b.ml) });
-      }
+      if (prev) prev.ml = Math.min(250, prev.ml + b.ml); else map.set(key,{nombre:b.nombre,momento:b.momento||'General',ml:Math.min(250,b.ml)});
     }
-
-    // 6) Ordenar por orden de momentos y luego por nombre
-    const orderIndex = (m: string) => {
-      const i = momentOrder.findIndex(o => o.toLowerCase() === m.toLowerCase());
-      return i === -1 ? 999 : i;
-    };
-    let finalList = Array.from(map.values()).sort((a,b) => {
-      const om = orderIndex(a.momento) - orderIndex(b.momento);
-      if (om !== 0) return om;
-      return a.nombre.localeCompare(b.nombre, 'es');
-    });
-
-    // Limitar a máximo 2 bebidas totales (2 tipos/momentos) según nueva regla
-    if (finalList.length > 2) {
-      const picked = [];
-      const momentsSeen = new Set();
-      for (const b of finalList) {
-        const mKey = b.momento.toLowerCase();
-        if (momentsSeen.has(mKey)) continue;
-        picked.push(b);
-        momentsSeen.add(mKey);
-        if (picked.length === 2) break;
-      }
-      finalList = picked;
+    const orderIndex = (m:string) => { const i = momentOrder.findIndex(o=>o.toLowerCase()===m.toLowerCase()); return i===-1?999:i; };
+    let finalList = Array.from(map.values()).sort((a,b)=>{ const om = orderIndex(a.momento)-orderIndex(b.momento); if(om!==0) return om; return a.nombre.localeCompare(b.nombre,'es'); });
+    if (finalList.length>2) {
+      const picked=[] as any[]; const momentsSeen=new Set();
+      for (const b of finalList){ const mKey=b.momento.toLowerCase(); if(momentsSeen.has(mKey)) continue; picked.push(b); momentsSeen.add(mKey); if(picked.length===2) break; }
+      finalList=picked;
     }
-
-    setBeverages(finalList.length ? finalList : null);
+    setBeverages(finalList.length?finalList:null);
   }, [rawBeverages, schedule, profile]);
 
   // Persistir preferencia de ver más/menos
@@ -1535,7 +1495,7 @@ export default function OnboardingAdvicePage() {
         {/* Importante: ningún dato (resumen, hidratación, comidas) se persiste mientras el usuario está aquí.
             Solo al presionar "Guardar y terminar" se aplican objetivos, se guarda el consejo y se completa el onboarding. */}
         <OnboardingActions
-          back={{ onClick: () => router.push("/onboarding/review"), label: "Volver" }}
+          back={{ onClick: () => resetAdviceState({ navigateBack: true }), label: "Volver" }}
           next={{ onClick: next, label: "Guardar y terminar", disabled: loading || (!ephemeralWeekly && !(weekly?.weekly && Array.isArray(weekly.weekly) && weekly.weekly.length)) }}
         />
     </OnboardingLayout>

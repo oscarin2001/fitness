@@ -4,6 +4,43 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
+// Helpers para normalizar el summary (convierte strings como "2637 kcal/día" a número)
+function num(n: any): number | null {
+  if (typeof n === 'number' && Number.isFinite(n)) return n;
+  if (typeof n === 'string') {
+    const m = n.replace(',', '.').match(/-?\d+(?:\.\d+)?/);
+    if (m) {
+      const v = Number(m[0]);
+      return Number.isFinite(v) ? v : null;
+    }
+  }
+  const v = Number(n);
+  return Number.isFinite(v) ? v : null;
+}
+
+function normalizeSummary(raw: any | null) {
+  if (!raw || typeof raw !== 'object') return null as any;
+  const s: any = { ...raw };
+  const pick = (...keys: string[]) => {
+    for (const k of keys) {
+      const v = (s as any)[k];
+      const n = num(v);
+      if (n != null) return n;
+    }
+    return null;
+  };
+  const out: any = {};
+  out.tmb = pick('tmb','TMB','TMB_kcal','tmb_kcal');
+  out.tdee = pick('tdee','TDEE','tdee_kcal','TDEE_kcal');
+  out.kcal_objetivo = pick('kcal_objetivo','kcal','calorias','calorias_objetivo');
+  out.deficit_superavit_kcal = pick('deficit_superavit_kcal','deficit_kcal','superavit_kcal','deficit');
+  out.ritmo_peso_kg_sem = pick('ritmo_peso_kg_sem','ritmo_kg_sem','rate_kg_week');
+  out.proteinas_g = pick('proteinas_g','proteina_g','proteinas','protein_g');
+  out.grasas_g = pick('grasas_g','grasas','fat_g','grasas_diarias_g');
+  out.carbohidratos_g = pick('carbohidratos_g','carbohidratos','carbs_g','carbohidratos_diarios_g');
+  return out;
+}
+
 function tryParseAdviceJson(text: string): { summary?: any; meals?: any; hydration?: any } | null {
   try {
     const lines = (text || "").split(/\n+/);
@@ -120,7 +157,9 @@ export default function ExportPlanPage() {
       // Resumen estructurado (si existe)
       let cursorY = margin + 40;
       const sum = summary?.summary || summary?.objetivos || null;
-      if (sum) {
+      // Normalizar para asegurar números (evita "—" por NaN)
+      const s = normalizeSummary(sum) || sum;
+      if (s) {
         doc.setTextColor(0);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(12);
@@ -128,14 +167,14 @@ export default function ExportPlanPage() {
         cursorY += 18;
         doc.setFont("helvetica", "normal");
         const rows: Array<[string, string]> = [
-          ["TMB", sum.tmb != null ? `${Math.round(sum.tmb)} kcal` : "—"],
-          ["TDEE", sum.tdee != null ? `${Math.round(sum.tdee)} kcal` : "—"],
-          ["Kcal objetivo", sum.kcal_objetivo != null ? `${Math.round(sum.kcal_objetivo)} kcal` : "—"],
-          ["Déficit/Superávit", sum.deficit_superavit_kcal != null ? `${Math.round(sum.deficit_superavit_kcal)} kcal/día` : "—"],
-          ["Ritmo estimado", sum.ritmo_peso_kg_sem != null ? `${Number(sum.ritmo_peso_kg_sem).toFixed(2)} kg/sem` : "—"],
-          ["Proteínas", sum.proteinas_g != null ? `${Math.round(sum.proteinas_g)} g` : "—"],
-          ["Grasas", sum.grasas_g != null ? `${Math.round(sum.grasas_g)} g` : "—"],
-          ["Carbohidratos", sum.carbohidratos_g != null ? `${Math.round(sum.carbohidratos_g)} g` : "—"],
+          ["TMB", s.tmb != null ? `${Math.round(s.tmb)} kcal` : "—"],
+          ["TDEE", s.tdee != null ? `${Math.round(s.tdee)} kcal` : "—"],
+          ["Kcal objetivo", s.kcal_objetivo != null ? `${Math.round(s.kcal_objetivo)} kcal` : "—"],
+          ["Déficit/Superávit", s.deficit_superavit_kcal != null ? `${Math.round(s.deficit_superavit_kcal)} kcal/día` : "—"],
+          ["Ritmo estimado", s.ritmo_peso_kg_sem != null ? `${Number(s.ritmo_peso_kg_sem).toFixed(2)} kg/sem` : "—"],
+          ["Proteínas", s.proteinas_g != null ? `${Math.round(s.proteinas_g)} g` : "—"],
+          ["Grasas", s.grasas_g != null ? `${Math.round(s.grasas_g)} g` : "—"],
+          ["Carbohidratos", s.carbohidratos_g != null ? `${Math.round(s.carbohidratos_g)} g` : "—"],
         ];
         const leftColWidth = 140;
         const lineHeight = 16;

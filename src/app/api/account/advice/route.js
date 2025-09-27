@@ -29,6 +29,23 @@ const ADVICE_LONG_TIMEOUT_MS  = parseInt(process.env.ADVICE_LONG_TIMEOUT_MS  || 
 const ADVICE_FALLBACK_TIMEOUT_MS = parseInt(process.env.ADVICE_FALLBACK_TIMEOUT_MS || '15000', 10); // fallback corto
 const FAST_MODE = process.env.ADVICE_STRICT_FAST === '1'; // Si está activo evitamos modelo largo
 const PREFETCH_MAX_MS = parseInt(process.env.ADVICE_PREFETCH_MAX_MS || '45000', 10); // watchdog máximo prefetch
+// Ventana mínima antes de permitir fallback local (para dar oportunidad a la IA). Por defecto 5 min.
+// Ventana mínima antes de permitir fallback local (ahora 3 min por petición del usuario)
+const ADVICE_MIN_FALLBACK_MS = parseInt(process.env.ADVICE_MIN_FALLBACK_MS || '180000', 10);
+
+function canUseLocalFallback(start) {
+  return (Date.now() - start) >= ADVICE_MIN_FALLBACK_MS;
+}
+
+async function waitMinWindow(start) {
+  const elapsed = Date.now() - start;
+  if (elapsed < ADVICE_MIN_FALLBACK_MS) {
+    const remaining = ADVICE_MIN_FALLBACK_MS - elapsed;
+    // Limitar log spam si remaining es muy grande
+    console.log(`[advice] Esperando ${remaining}ms extra antes de fallback local (elapsed=${elapsed} < min=${ADVICE_MIN_FALLBACK_MS})`);
+    await new Promise(r => setTimeout(r, remaining));
+  }
+}
 
 function getCookieName() {
   return process.env.NODE_ENV === "production" ? "__Secure-authjs.session-token" : "authjs.session-token";
@@ -60,6 +77,14 @@ function calcAge(date) {
 export async function POST(request) {
   try {
   const url = new URL(request.url);
+  console.log('[advice][config]', {
+    FLASH: ADVICE_FLASH_TIMEOUT_MS,
+    LONG: ADVICE_LONG_TIMEOUT_MS,
+    FALLBACK_SHORT: ADVICE_FALLBACK_TIMEOUT_MS,
+    MIN_FALLBACK: ADVICE_MIN_FALLBACK_MS,
+    PREFETCH_MAX_MS,
+    FAST_MODE
+  });
   const debugMode = url.searchParams.get("debug") === "1";
   // Permite solicitar ver el prompt exacto enviado al modelo sin activar todo el modo debug completo
   const debugPromptOnly = url.searchParams.get("debugPrompt") === "1";
@@ -69,6 +94,7 @@ export async function POST(request) {
   const ensureFull = url.searchParams.get("ensureFull") === "1";
   // Devuelve siempre el prompt completo (además de debugPrompt) si se pasa showPrompt=1
   const showPrompt = url.searchParams.get("showPrompt") === "1";
+  const strictMode = url.searchParams.get("ai_strict") === "1"; // fuerza intentar más tiempo modelos IA antes de fallback
   // Soportar múltiples formas de solicitar modelo largo
   let forceLong = url.searchParams.get("forceLong") === "1" || url.searchParams.get("mode") === "long";
   // Intentar leer body para detectar flags (si viene vacío no falla)
@@ -126,12 +152,17 @@ export async function POST(request) {
         return crypto.createHash("sha256").update(json).digest("hex");
       } catch { return null; }
     }
-    const currentHash = computePlanHash(user, prefs, preferredProteinDaily);
-    const isPrefetch = url.searchParams.get("prefetch") === "1";
+  const currentHash = computePlanHash(user, prefs, preferredProteinDaily);
+  const isPrefetch = url.searchParams.get("prefetch") === "1";
 
     // Si se solicita invalidación, limpiar cache antes de revisar
     if (invalidate) {
       try { await prisma.usuario.update({ where: { id: userId }, data: { plan_ai: null } }); } catch {}
+    }
+
+    // Concurrency guard también para peticiones normales (antes sólo prefetch). Si otra generación está activa, respondemos 202.
+    if (!isPrefetch && activeGenerations.has(userId)) {
+      return NextResponse.json({ pending: true }, { status: 202 });
     }
 
     if (!forceLong && !invalidate) {
@@ -146,7 +177,9 @@ export async function POST(request) {
             'Resumen rápido (fallback crítico)'
           ];
           if (legacyPhrases.some(p => advice.includes(p))) return true;
-            // Si no contiene el marcador JSON_SUMMARY probablemente sea incompleto viejo
+          // Nuevo: considerar inválido cualquier fallback local para forzar un nuevo intento IA al recargar
+          if (/^# Consejo generado localmente \(fallback\)/.test(advice.trim())) return true;
+          // Si no contiene el marcador JSON_SUMMARY probablemente sea incompleto viejo
           if (!advice.includes('JSON_SUMMARY')) return true;
           return false;
         }
@@ -281,17 +314,20 @@ ${wantTypesText}`;
       }
       const t0 = Date.now();
   let content = null; let usedModel = null; let phase = 'start'; let genMs = null; // genMs se calcula al final salvo fallback
+      const attemptLog = [];
       try {
         if (opts.forceLong && !FAST_MODE) {
           phase = 'long-primary';
           const res = await withTimeout(runModel(GEMINI_MODEL_LONG, FULL_PROMPT), ADVICE_LONG_TIMEOUT_MS);
           content = res.text; usedModel = GEMINI_MODEL_LONG;
+          attemptLog.push({ phase, model: usedModel, chars: content?.length || 0 });
         } else {
           // Flash primero (más rápido)
             phase = 'flash-primary';
             try {
               const resFlash = await withTimeout(runModel(GEMINI_MODEL_FALLBACK, FULL_PROMPT), ADVICE_FLASH_TIMEOUT_MS);
               content = resFlash.text; usedModel = GEMINI_MODEL_FALLBACK;
+              attemptLog.push({ phase, model: usedModel, chars: content?.length || 0 });
             } catch (eFlash) {
               if (!FAST_MODE) {
                 // Intentar long si no estamos en fast mode
@@ -299,19 +335,25 @@ ${wantTypesText}`;
                 try {
                   const resLong = await withTimeout(runModel(GEMINI_MODEL_LONG, FULL_PROMPT), ADVICE_LONG_TIMEOUT_MS);
                   content = resLong.text; usedModel = GEMINI_MODEL_LONG;
+                  attemptLog.push({ phase, model: usedModel, chars: content?.length || 0 });
                 } catch (eLong) {
                   phase = 'flash-reduced';
                   try {
                     const shortPrompt = FULL_PROMPT + "\n\n(Genera solo bloques JSON concisos.)";
                     const resShort = await withTimeout(runModel(GEMINI_MODEL_FALLBACK, shortPrompt), ADVICE_FALLBACK_TIMEOUT_MS);
                     content = resShort.text; usedModel = GEMINI_MODEL_FALLBACK + "-short";
+                    attemptLog.push({ phase, model: usedModel, chars: content?.length || 0 });
                   } catch (eShort) {
+                    phase = 'local-fallback-delay-check';
+                    if (!canUseLocalFallback(t0)) {
+                      await waitMinWindow(t0);
+                    }
                     phase = 'local-fallback';
                     const fallbackResult = await generateFallbackContent();
                     content = fallbackResult.content;
                     usedModel = fallbackResult.usedModel;
-                    // Usar el valor del fallback
                     genMs = fallbackResult.genMs;
+                    attemptLog.push({ phase, model: usedModel, chars: content?.length || 0 });
                   }
                 }
               } else {
@@ -321,35 +363,40 @@ ${wantTypesText}`;
                   const shortPrompt = FULL_PROMPT + "\n\n(Genera solo bloques JSON concisos.)";
                   const resShort = await withTimeout(runModel(GEMINI_MODEL_FALLBACK, shortPrompt), ADVICE_FALLBACK_TIMEOUT_MS);
                   content = resShort.text; usedModel = GEMINI_MODEL_FALLBACK + "-short";
+                  attemptLog.push({ phase, model: usedModel, chars: content?.length || 0 });
                 } catch (eShortFast) {
+                  phase = 'local-fallback-fast-delay-check';
+                  if (!canUseLocalFallback(t0)) { await waitMinWindow(t0); }
                   phase = 'local-fallback-fast';
                   const fallbackResult = await generateFallbackContent();
                   content = fallbackResult.content;
                   usedModel = fallbackResult.usedModel;
-                  // Usar el valor del fallback
                   genMs = fallbackResult.genMs;
+                  attemptLog.push({ phase, model: usedModel, chars: content?.length || 0 });
                 }
               }
             }
         }
       } catch (err) {
-        phase = 'catch-local-fallback';
-        const fallbackResult = await generateFallbackContent();
-        content = fallbackResult.content;
-        usedModel = fallbackResult.usedModel;
-        // Usar el valor del fallback
-        genMs = fallbackResult.genMs;
+  phase = 'catch-local-fallback-delay-check';
+  if (!canUseLocalFallback(t0)) { await waitMinWindow(t0); }
+  phase = 'catch-local-fallback';
+  const fallbackResult = await generateFallbackContent();
+  content = fallbackResult.content;
+  usedModel = fallbackResult.usedModel;
+  genMs = fallbackResult.genMs;
       }
   // Si no se estableció antes (fallback), calcular duración ahora
   genMs = genMs ?? (Date.now() - t0);
 
   // Reintento extendido si el usuario solicita ensureFull y el resultado parece incompleto (modelo short, fallback o texto muy corto)
-  if (ensureFull) {
+  if (ensureFull || strictMode) {
     const looksShort = !content || content.length < 1200 || /-short$/.test(usedModel || '');
     const isLocalFallback = (usedModel || '').startsWith('fallback');
     if ((looksShort || isLocalFallback) && !FAST_MODE) {
       try {
-        const extendedTimeout = ADVICE_LONG_TIMEOUT_MS + 15000; // +15s adicionales
+  const extraMs = strictMode ? 45000 : 15000;
+  const extendedTimeout = ADVICE_LONG_TIMEOUT_MS + extraMs; // tiempo extendido
         const startRetry = Date.now();
         const resExtended = await withTimeout(runModel(GEMINI_MODEL_LONG, MAIN_PROMPT), extendedTimeout);
         content = resExtended.text;
@@ -363,7 +410,7 @@ ${wantTypesText}`;
       }
     }
   }
-  console.log(`[advice][generateFullAdvice] phase=${phase} model=${usedModel} genMs=${genMs}`);
+  console.log(`[advice][generateFullAdvice] phase=${phase} model=${usedModel} genMs=${genMs} attempts=${JSON.stringify(attemptLog)}`);
   return { content, usedModel: usedModel || 'unknown', genMs };
     }
 
@@ -420,8 +467,11 @@ ${wantTypesText}`;
             if (summary && preferredProteinDaily) { try { summary.proteinas_g = preferredProteinDaily; } catch {} }
             try {
               if (currentHash && meals && summary && content) {
-                const cacheObj = { advice: content, summary, meals, hydration, beverages: beveragesPlan, hash: currentHash, model: usedModel, generated_ms: genMs, ts: new Date().toISOString() };
-                await prisma.usuario.update({ where: { id: userId }, data: { plan_ai: cacheObj } });
+                const isLocalFallback = (usedModel || '').startsWith('fallback-local');
+                if (!isLocalFallback) {
+                  const cacheObj = { advice: content, summary, meals, hydration, beverages: beveragesPlan, hash: currentHash, model: usedModel, generated_ms: genMs, ts: new Date().toISOString() };
+                  await prisma.usuario.update({ where: { id: userId }, data: { plan_ai: cacheObj } });
+                }
               }
             } catch {}
             finished = true;
@@ -434,26 +484,15 @@ ${wantTypesText}`;
         })();
         activeGenerations.set(userId, genPromise);
         // Watchdog
+        // Watchdog ampliado: no forzar fallback antes de la ventana mínima salvo que ADVICE_PREFETCH_MAX_MS supere ese valor.
+        const watchdogLimit = Math.max(PREFETCH_MAX_MS, ADVICE_MIN_FALLBACK_MS);
         setTimeout(() => {
-          if (!finished && Date.now() - startedAt >= PREFETCH_MAX_MS) {
-            console.warn(`[advice][prefetch][watchdog] excedido ${PREFETCH_MAX_MS}ms -> liberando slot y guardando fallback mínimo`);
+          if (!finished && Date.now() - startedAt >= watchdogLimit) {
+            console.warn(`[advice][prefetch][watchdog] excedido ${watchdogLimit}ms -> liberando slot. Se permitirá fallback local en próxima solicitud.`);
             activeGenerations.delete(userId);
-            // Generar y cachear fallback mínimo para evitar que el cliente siga polling sin resultado
-            (async () => {
-              try {
-                const fb = await generateFallbackContent();
-                const extract = (label, txt) => null; // no necesitamos parsear, sólo cachear texto + summary local
-                const localSummary = buildLocalSummary();
-                const meals = { items: [] };
-                const hydration = { litros: 2 };
-                const beveragesPlan = null;
-                if (currentHash) {
-                  await prisma.usuario.update({ where: { id: userId }, data: { plan_ai: { advice: fb.content, summary: localSummary, meals, hydration, beverages: beveragesPlan, hash: currentHash, model: fb.usedModel, generated_ms: fb.genMs, ts: new Date().toISOString() } } });
-                }
-              } catch (e) { console.error('[advice][watchdog][fallback-cache] error', e); }
-            })();
+            // NO cacheamos fallback inmediato aquí; dejamos que la siguiente petición decida según canUseLocalFallback.
           }
-        }, PREFETCH_MAX_MS + 50);
+        }, watchdogLimit + 100);
       }
       return NextResponse.json({ started: true }, { status: 202 });
     }
@@ -520,6 +559,7 @@ ${wantTypesText}`;
           mainPhase = 'flash-primary';
           const resFlash = await withTimeout(runModel(GEMINI_MODEL_FALLBACK, MAIN_PROMPT), ADVICE_FLASH_TIMEOUT_MS);
           content = resFlash.text; usedModel = GEMINI_MODEL_FALLBACK;
+          console.log('[advice][main] flash-primary chars=', content?.length || 0);
         } catch (eFlash) {
           if (!FAST_MODE) {
             // Intentar long
@@ -527,6 +567,7 @@ ${wantTypesText}`;
               mainPhase = 'long-after-flash-fail';
               const resLong = await withTimeout(runModel(GEMINI_MODEL_LONG, MAIN_PROMPT), ADVICE_LONG_TIMEOUT_MS);
               content = resLong.text; usedModel = GEMINI_MODEL_LONG;
+              console.log('[advice][main] long-after-flash-fail chars=', content?.length || 0);
             } catch (eLong) {
               // Prompt reducido
               const shortPrompt = MAIN_PROMPT + "\n\n(Genera solo los bloques JSON pedidos y muy conciso.)";
@@ -534,10 +575,18 @@ ${wantTypesText}`;
                 mainPhase = 'short-after-long-fail';
                 const resShort = await withTimeout(runModel(GEMINI_MODEL_FALLBACK, shortPrompt), ADVICE_FALLBACK_TIMEOUT_MS);
                 content = resShort.text; usedModel = GEMINI_MODEL_FALLBACK + "-short";
+                console.log('[advice][main] short-after-long-fail chars=', content?.length || 0);
               } catch (eShort) {
-                mainPhase = 'local-fallback';
-                const fb = await generateFallbackContent();
-                content = fb.content; usedModel = fb.usedModel; genMs = fb.genMs;
+                // Si en este punto content sigue vacío realmente (todas las ramas IA fallaron) sólo entonces consideramos fallback
+                if (!content) {
+                  mainPhase = 'local-fallback-delay-check';
+                  if (!canUseLocalFallback(t0)) { await waitMinWindow(t0); }
+                  mainPhase = 'local-fallback';
+                  const fb = await generateFallbackContent();
+                  content = fb.content; usedModel = fb.usedModel; genMs = fb.genMs;
+                } else {
+                  console.log('[advice][main] Skip fallback because content already present before fallback path');
+                }
               }
             }
           } else {
@@ -547,10 +596,17 @@ ${wantTypesText}`;
               mainPhase = 'short-fast';
               const resShortFast = await withTimeout(runModel(GEMINI_MODEL_FALLBACK, shortPrompt), ADVICE_FALLBACK_TIMEOUT_MS);
               content = resShortFast.text; usedModel = GEMINI_MODEL_FALLBACK + "-short";
+              console.log('[advice][main] short-fast chars=', content?.length || 0);
             } catch (eShortFast) {
-              mainPhase = 'local-fallback-fast';
-              const fbFast = await generateFallbackContent();
-              content = fbFast.content; usedModel = fbFast.usedModel; genMs = fbFast.genMs;
+              if (!content) {
+                mainPhase = 'local-fallback-fast-delay-check';
+                if (!canUseLocalFallback(t0)) { await waitMinWindow(t0); }
+                mainPhase = 'local-fallback-fast';
+                const fbFast = await generateFallbackContent();
+                content = fbFast.content; usedModel = fbFast.usedModel; genMs = fbFast.genMs;
+              } else {
+                console.log('[advice][main] Skip fast fallback because content already present');
+              }
             }
           }
         }
@@ -561,16 +617,21 @@ ${wantTypesText}`;
         mainPhase = 'catch-short-attempt';
   const shortPrompt = MAIN_PROMPT + "\n\n(Genera solo los bloques JSON pedidos y un breve análisis; sé conciso.)";
   const res2 = await withTimeout(runModel(GEMINI_MODEL_FALLBACK, shortPrompt), ADVICE_FALLBACK_TIMEOUT_MS);
-        content = res2.text;
-        usedModel = GEMINI_MODEL_FALLBACK;
+    content = res2.text;
+    usedModel = GEMINI_MODEL_FALLBACK;
+    console.log('[advice][main] catch-short-attempt chars=', content?.length || 0);
       } catch (e2) {
-        mainPhase = 'catch-local-fallback';
-        // Fallback final: generar estructura mínima sin IA (para debug)
-        const fallbackResult = await generateFallbackContent();
-        content = fallbackResult.content;
-        usedModel = fallbackResult.usedModel;
-        // Usar el valor del fallback
-        genMs = fallbackResult.genMs;
+        if (!content) {
+          mainPhase = 'catch-local-fallback-delay-check';
+          if (!canUseLocalFallback(t0)) { await waitMinWindow(t0); }
+          mainPhase = 'catch-local-fallback';
+          const fallbackResult = await generateFallbackContent();
+          content = fallbackResult.content;
+          usedModel = fallbackResult.usedModel;
+          genMs = fallbackResult.genMs;
+        } else {
+          console.log('[advice][main] catch block but had content, skip fallback');
+        }
       }
     }
   genMs = genMs ?? (Date.now() - t0);
@@ -787,8 +848,11 @@ ${wantTypesText}`;
     // Persistir en cache si generación fue exitosa (no fallback minimal) y hay hash
     try {
       if (currentHash && meals && summary && content) {
-        const cacheObj = { advice: content, summary, meals, hydration, beverages: beveragesPlan, hash: currentHash, model: usedModel, generated_ms: genMs, ts: new Date().toISOString() };
-        await prisma.usuario.update({ where: { id: userId }, data: { plan_ai: cacheObj } });
+        const isLocalFallback = (usedModel || '').startsWith('fallback-local');
+        if (!isLocalFallback) {
+          const cacheObj = { advice: content, summary, meals, hydration, beverages: beveragesPlan, hash: currentHash, model: usedModel, generated_ms: genMs, ts: new Date().toISOString() };
+          await prisma.usuario.update({ where: { id: userId }, data: { plan_ai: cacheObj } });
+        }
       }
     } catch {}
 
@@ -807,6 +871,7 @@ ${wantTypesText}`;
   } else if (showPrompt && baseResponse.debug && !baseResponse.debug.prompt) {
     baseResponse.debug.prompt = MAIN_PROMPT;
   }
+  console.log('[advice][response] mainPhase=', mainPhase, 'model=', usedModel, 'chars=', content ? content.length : 0, 'fallback=', isFallback);
   return NextResponse.json(baseResponse, { status: 200 });
   } catch (e) {
     console.error("/api/account/advice error", e);
