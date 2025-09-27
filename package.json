@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+  "dev": "next dev --turbopack",
     "verify:prisma": "node scripts/verify-prisma.mjs",
     "prisma:prepare": "node scripts/prisma-prepare.mjs",
-    "build": "npm run verify:prisma && npm run prisma:prepare && next build",
+  "prebuild:info": "node -e \"console.log('[build-info] commit', process.env.VERCEL_GIT_COMMIT_SHA || 'local')\"",
+  "build": "npm run prebuild:info && npm run verify:prisma && npm run prisma:prepare && next build",
     "start": "next start",
     "lint": "next lint",
     "db:clean": "node scripts/clean-db.mjs",
