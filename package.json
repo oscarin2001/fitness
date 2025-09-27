@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:clean": "node scripts/clean-db.mjs"
   },
   "dependencies": {
     "@ai-sdk/google": "^2.0.8",
